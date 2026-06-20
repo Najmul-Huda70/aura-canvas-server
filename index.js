@@ -20,7 +20,7 @@ app.use(express.json());
 
 // 5. Environmental configurations
 const port = process.env.PORT || 3001; // Fallback default to 3001 if undefined
-const uri = process.env.MONGO_DB_URI;  // FIX: Matching your .env name
+const uri = process.env.MONGO_DB_URI; // FIX: Matching your .env name
 const JWKS = `${process.env.CLIENT_URL}/api/auth/jwks`;
 
 // 6. MongoDB Client instance initializer
@@ -46,7 +46,7 @@ const verifyToken = async (req, res, next) => {
     return res.status(401).json({ message: "Unauthorized! Token missing." });
   }
   const token = authorization.split(" ")[1];
-  
+
   if (!token) {
     return res.status(401).json({ message: "Unauthorized" });
   }
@@ -71,9 +71,8 @@ async function dbConnection() {
     await client.connect();
 
     const db = client.db(process.env.MONGO_DB);
-    featuredCollection = db.collection("features");
-    salesCollection=db.collection('sales');
-    artworkCollection=db.collection('artworks');
+    salesCollection = db.collection("sales");
+    artworkCollection = db.collection("artworks");
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
@@ -83,102 +82,132 @@ async function dbConnection() {
 }
 dbConnection().catch(console.dir);
 
-
 // Base application check points
 app.get("/", (req, res) => {
   res.send("Hello World!");
 });
-app.get("/features", async (req, res) => {
+
+app.get("/artworks", async (req, res) => {
   try {
-    if (!featuredCollection) {
-      return res.status(500).json({ message: "Database collection not initialized" });
+    if (!artworkCollection) {
+      return res
+        .status(500)
+        .json({ message: "Database collection not initialized" });
     }
-    
+
     let query = {};
-    const { id, search } = req.query;
-    
+    const { id, search, userId, features } = req.query;
+
     if (id) {
-      query._id =id;
+      if (ObjectId.isValid(id)) {
+        query._id = new ObjectId(id);
+      } else {
+        query._id = id;
+      }
     }
-    
+
+    if (userId) {
+      if (ObjectId.isValid(userId)) {
+        query.artistId = new ObjectId(userId);
+      } else {
+        query.artistId = userId;
+      }
+    }
+
+    // ফিক্সড অংশ: স্ট্রিং থেকে বুলিয়ানে কনভার্ট করা হলো
+    if (features) {
+      query.features = features === "true";
+    }
+
     if (search) {
       query.$or = [
         { title: { $regex: search, $options: "i" } },
-        { artistName: { $regex: search, $options: "i" } }
+        { artistName: { $regex: search, $options: "i" } },
       ];
     }
-    
-    const result = await featuredCollection.find(query).toArray();
-    
-    if (id && result.length === 0) {
-      return res.status(404).json({ message: "Artwork not found" });
-    }
-    
-    res.status(200).json(id ? result[0] : result);
-    
+
+    const result = await artworkCollection.find(query).toArray();
+
+    res.status(200).json({
+      success: true,
+      data: result
+    });
+
   } catch (error) {
-    console.error("Error fetching features:", error);
-    res.status(500).json({ message: "Internal Server Error", error: error.message });
+    console.error("Error fetching artworks:", error);
+    res
+      .status(500)
+      .json({ success: false, message: "Internal Server Error", error: error.message });
   }
 });
 app.get("/artworks", async (req, res) => {
   try {
     if (!artworkCollection) {
-      return res.status(500).json({ message: "Database collection not initialized" });
+      return res
+        .status(500)
+        .json({ message: "Database collection not initialized" });
     }
-    
+
     let query = {};
     const { id, search } = req.query;
-    
+
     if (id) {
-      query.artist_id =new ObjectId(id);
+      query.artistId = new ObjectId(id);
     }
-    
+
     // if (search) {
     //   query.$or = [
     //     { title: { $regex: search, $options: "i" } },
     //     { artistName: { $regex: search, $options: "i" } }
     //   ];
     // }
-    
+
     const result = await artworkCollection.find(query).toArray();
-    
-    // if (id && result.length === 0) {
-    //   return res.status(404).json({ message: "Artwork not found" });
-    // }
-    
-    res.status(200).json({success:true,count:result.length,data:result});
-    
+
+    res.status(200).json({ success: true, count: result.length, data: result });
   } catch (error) {
     console.error("Error fetching features:", error);
-    res.status(500).json({ message: "Internal Server Error", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Internal Server Error", error: error.message });
   }
 });
-app.post('/artworks', async (req, res) => {
+app.post("/artworks", async (req, res) => {
   try {
     if (!artworkCollection) {
-      return res.status(500).json({ message: "Database artworks collection not initialized" });
+      return res
+        .status(500)
+        .json({ message: "Database artworks collection not initialized" });
     }
 
-    const { title, artistId, description, price, category, imageUrl, features } = req.body;
+    const {
+      title,
+      artistId,
+      description,
+      price,
+      category,
+      imageUrl,
+      features,
+    } = req.body;
 
     if (!title || !artistId || !price || !category || !imageUrl) {
-      return res.status(400).json({ 
-        message: "Missing required fields (title, artistId, price, category, imageUrl)" 
+      return res.status(400).json({
+        message:
+          "Missing required fields (title, artistId, price, category, imageUrl)",
       });
     }
 
     const newArtwork = {
       title: title.trim(),
-      artist_id: new ObjectId(artistId), 
+      artistId: new ObjectId(artistId),
       description: description || "",
       price: Number(price),
       category: category,
-      imageUrl: imageUrl, 
-      features: features === true || features === "true", 
-      status: "available", 
+      imageUrl: imageUrl,
+      features: features === true || features === "true",
+      status: "available",
       createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
     };
 
     const result = await artworkCollection.insertOne(newArtwork);
@@ -186,53 +215,120 @@ app.post('/artworks', async (req, res) => {
     res.status(201).json({
       success: true,
       message: "Artwork uploaded successfully.",
-      artworkId: result.insertedId 
+      artworkId: result.insertedId,
     });
-
   } catch (error) {
     console.error("Error inserting artwork:", error);
-    res.status(500).json({ message: "Internal Server Error", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Internal Server Error", error: error.message });
   }
 });
-app.post('/sales',async(req,res,next)=>{
+app.post("/sales", async (req, res, next) => {
   const session = client.startSession();
- try{
-  if (!salesCollection || !artworkCollection) {
-      return res.status(500).json({ message: "Database collections not initialized" });
+  try {
+    if (!salesCollection || !artworkCollection) {
+      return res
+        .status(500)
+        .json({ message: "Database collections not initialized" });
     }
 
     const { artworkId, buyerId, amount, status, salingDate } = req.body;
     if (!artworkId || !buyerId || !amount) {
-      return res.status(400).json({ message: "Missing required fields (artworkId, buyerId, amount)" });
+      return res
+        .status(400)
+        .json({
+          message: "Missing required fields (artworkId, buyerId, amount)",
+        });
     }
     session.startTransaction();
-    const saleResult =await salesCollection.insertOne(newSale,{session});
+    const saleResult = await salesCollection.insertOne(newSale, { session });
     const artworkUpdateResult = await artworkCollection.updateOne(
       { _id: artworkId },
       { $set: { status: "sold", updatedAt: new Date().toISOString() } },
-      { session }
+      { session },
     );
     if (artworkUpdateResult.matchedCount === 0) {
-     throw new Error("Artwork not found with the provided ID");
+      throw new Error("Artwork not found with the provided ID");
     }
     await session.commitTransaction();
     res.status(201).json({
       success: true,
       message: "Sale recorded successfully and artwork status updated to sold.",
-      saleId: saleResult.insertedId
+      saleId: saleResult.insertedId,
     });
- }
- catch (error) {
+  } catch (error) {
     console.error("Transaction aborted due to error:", error);
     if (session.inTransaction()) {
       await session.abortTransaction();
     }
 
-    res.status(500).json({ message: "Internal Server Error", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Internal Server Error", error: error.message });
   } finally {
     await session.endSession();
   }
-})
+});
+app.put("/artworks/:id", async (req, res) => {
+  try {
+    const artworkId = req.params.id;
+    console.log('artworkId: ',artworkId);
+    const { title, description, price, category, imageUrl } = req.body;
+
+   if (!ObjectId.isValid(artworkId)) {
+      return res.status(400).json({ success: false, message: "Invalid Artwork ID Format" });
+    }
+
+    const updateData = {
+      $set: {
+        title: title.trim(),
+        description: description,
+        price: Number(price), 
+        category: category,
+        imageUrl: imageUrl,
+        updatedAt: new Date() 
+      }
+    };
+
+    const result = await artworkCollection.updateOne(
+      { _id: new ObjectId(artworkId) }, 
+      updateData
+    );
+
+    if (result.matchedCount === 1) {
+      res.json({ success: true, message: "Artwork updated successfully in database!" });
+    } else {
+      res.status(404).json({ success: false, message: "Artwork not found in database" });
+    }
+
+  } catch (error) {
+    console.error("Database Update Error:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+});
+app.delete("/artworks/:id", async (req, res) => {
+  const id = req.params.id;
+  try {
+    if (!artworkCollection) {
+      return res
+        .status(500)
+        .json({ message: "Database collections not initialized" });
+    }
+    const result = await artworkCollection.deleteOne({ _id: new ObjectId(id) });
+    if (result.deletedCount === 1) {
+      res.json({
+        success: true,
+        message: "Artwork deleted successfully from database",
+      });
+    } else {
+      res.status(404).json({ success: false, message: "Artwork not found" });
+    }
+  } catch (error) {
+    console.error("Error deleting artwork:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
 
 // App server activation listener block
 app.listen(port, () => {
