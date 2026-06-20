@@ -9,6 +9,7 @@ const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 
 // FIX: Always require "mongodb" string, not env variable
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { success } = require("better-auth");
 
 // 3. Initialize Express app instance
 const app = express();
@@ -62,7 +63,8 @@ const verifyToken = async (req, res, next) => {
 };
 
 let featuredCollection;
-
+let salesCollection;
+let artworkCollection;
 // 7. Establish Connection to Database Instance Layer
 async function dbConnection() {
   try {
@@ -70,7 +72,8 @@ async function dbConnection() {
 
     const db = client.db(process.env.MONGO_DB);
     featuredCollection = db.collection("features");
-
+    salesCollection=db.collection('sales');
+    artworkCollection=db.collection('artworks');
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
@@ -81,7 +84,10 @@ async function dbConnection() {
 dbConnection().catch(console.dir);
 
 
-
+// Base application check points
+app.get("/", (req, res) => {
+  res.send("Hello World!");
+});
 app.get("/features", async (req, res) => {
   try {
     if (!featuredCollection) {
@@ -92,10 +98,6 @@ app.get("/features", async (req, res) => {
     const { id, search } = req.query;
     
     if (id) {
-      // if (!ObjectId.isValid(id)) {
-      //   return res.status(400).json({ message: "Invalid Artwork ID format" });
-      // }
-      // query._id = new ObjectId(id);
       query._id =id;
     }
     
@@ -119,11 +121,118 @@ app.get("/features", async (req, res) => {
     res.status(500).json({ message: "Internal Server Error", error: error.message });
   }
 });
-
-// Base application check points
-app.get("/", (req, res) => {
-  res.send("Hello World!");
+app.get("/artworks", async (req, res) => {
+  try {
+    if (!artworkCollection) {
+      return res.status(500).json({ message: "Database collection not initialized" });
+    }
+    
+    let query = {};
+    const { id, search } = req.query;
+    
+    if (id) {
+      query.artist_id =new ObjectId(id);
+    }
+    
+    // if (search) {
+    //   query.$or = [
+    //     { title: { $regex: search, $options: "i" } },
+    //     { artistName: { $regex: search, $options: "i" } }
+    //   ];
+    // }
+    
+    const result = await artworkCollection.find(query).toArray();
+    
+    // if (id && result.length === 0) {
+    //   return res.status(404).json({ message: "Artwork not found" });
+    // }
+    
+    res.status(200).json({success:true,count:result.length,data:result});
+    
+  } catch (error) {
+    console.error("Error fetching features:", error);
+    res.status(500).json({ message: "Internal Server Error", error: error.message });
+  }
 });
+app.post('/artworks', async (req, res) => {
+  try {
+    if (!artworkCollection) {
+      return res.status(500).json({ message: "Database artworks collection not initialized" });
+    }
+
+    const { title, artistId, description, price, category, imageUrl, features } = req.body;
+
+    if (!title || !artistId || !price || !category || !imageUrl) {
+      return res.status(400).json({ 
+        message: "Missing required fields (title, artistId, price, category, imageUrl)" 
+      });
+    }
+
+    const newArtwork = {
+      title: title.trim(),
+      artist_id: new ObjectId(artistId), 
+      description: description || "",
+      price: Number(price),
+      category: category,
+      imageUrl: imageUrl, 
+      features: features === true || features === "true", 
+      status: "available", 
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    const result = await artworkCollection.insertOne(newArtwork);
+
+    res.status(201).json({
+      success: true,
+      message: "Artwork uploaded successfully.",
+      artworkId: result.insertedId 
+    });
+
+  } catch (error) {
+    console.error("Error inserting artwork:", error);
+    res.status(500).json({ message: "Internal Server Error", error: error.message });
+  }
+});
+app.post('/sales',async(req,res,next)=>{
+  const session = client.startSession();
+ try{
+  if (!salesCollection || !artworkCollection) {
+      return res.status(500).json({ message: "Database collections not initialized" });
+    }
+
+    const { artworkId, buyerId, amount, status, salingDate } = req.body;
+    if (!artworkId || !buyerId || !amount) {
+      return res.status(400).json({ message: "Missing required fields (artworkId, buyerId, amount)" });
+    }
+    session.startTransaction();
+    const saleResult =await salesCollection.insertOne(newSale,{session});
+    const artworkUpdateResult = await artworkCollection.updateOne(
+      { _id: artworkId },
+      { $set: { status: "sold", updatedAt: new Date().toISOString() } },
+      { session }
+    );
+    if (artworkUpdateResult.matchedCount === 0) {
+     throw new Error("Artwork not found with the provided ID");
+    }
+    await session.commitTransaction();
+    res.status(201).json({
+      success: true,
+      message: "Sale recorded successfully and artwork status updated to sold.",
+      saleId: saleResult.insertedId
+    });
+ }
+ catch (error) {
+    console.error("Transaction aborted due to error:", error);
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+
+    res.status(500).json({ message: "Internal Server Error", error: error.message });
+  } finally {
+    await session.endSession();
+  }
+})
 
 // App server activation listener block
 app.listen(port, () => {
