@@ -63,7 +63,6 @@ const verifyToken = async (req, res, next) => {
 };
 
 let artworkCollection;
-let salesCollection;
 let purchaseCollection;
 // 7. Establish Connection to Database Instance Layer
 async function dbConnection() {
@@ -72,7 +71,6 @@ async function dbConnection() {
 
     const db = client.db(process.env.MONGO_DB);
     artworkCollection = db.collection("artworks");
-    salesCollection = db.collection("sales");
     purchaseCollection=db.collection("purchase");
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
@@ -151,6 +149,7 @@ app.post("/artworks", async (req, res) => {
     const {
       title,
       artistId,
+      artistName,
       description,
       price,
       category,
@@ -168,6 +167,7 @@ app.post("/artworks", async (req, res) => {
     const newArtwork = {
       title: title.trim(),
       artistId: new ObjectId(artistId),
+      artistName:artistName || "",
       description: description || "",
       price: Number(price),
       category: category,
@@ -303,10 +303,10 @@ try {
   }
 })
 
-app.post("/sales", async (req, res, next) => {
+app.post("/purchase", async (req, res, next) => {
   const session = client.startSession();
   try {
-    if (!salesCollection || !artworkCollection) {
+    if (!purchaseCollection || !artworkCollection) {
       return res
         .status(500)
         .json({ message: "Database collections not initialized" });
@@ -321,7 +321,7 @@ app.post("/sales", async (req, res, next) => {
         });
     }
     session.startTransaction();
-    const saleResult = await salesCollection.insertOne(newSale, { session });
+    const saleResult = await purchaseCollection.insertOne(newSale, { session });
     const artworkUpdateResult = await artworkCollection.updateOne(
       { _id: artworkId },
       { $set: { status: "sold", updatedAt: new Date().toISOString() } },
