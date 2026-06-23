@@ -64,14 +64,22 @@ const verifyToken = async (req, res, next) => {
 
 let artworkCollection;
 let purchaseCollection;
+let reviewsCollection;
+let plansCollection;
+let subscriptionCollection;
+let userCollection;
 // 7. Establish Connection to Database Instance Layer
 async function dbConnection() {
   try {
     await client.connect();
 
     const db = client.db(process.env.MONGO_DB);
+    userCollection=db.collection('user');
     artworkCollection = db.collection("artworks");
-    purchaseCollection=db.collection("purchase");
+    purchaseCollection = db.collection("purchase");
+    reviewsCollection = db.collection("reviews");
+    plansCollection = db.collection("plans");
+    subscriptionCollection=db.collection("subscriptions");
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
@@ -128,14 +136,17 @@ app.get("/artworks", async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: result
+      data: result,
     });
-
   } catch (error) {
     console.error("Error fetching artworks:", error);
     res
       .status(500)
-      .json({ success: false, message: "Internal Server Error", error: error.message });
+      .json({
+        success: false,
+        message: "Internal Server Error",
+        error: error.message,
+      });
   }
 });
 app.post("/artworks", async (req, res) => {
@@ -167,7 +178,7 @@ app.post("/artworks", async (req, res) => {
     const newArtwork = {
       title: title.trim(),
       artistId: new ObjectId(artistId),
-      artistName:artistName || "",
+      artistName: artistName || "",
       description: description || "",
       price: Number(price),
       category: category,
@@ -195,35 +206,41 @@ app.post("/artworks", async (req, res) => {
 app.put("/artworks/:id", async (req, res) => {
   try {
     const artworkId = req.params.id;
-    console.log('artworkId: ',artworkId);
+    console.log("artworkId: ", artworkId);
     const { title, description, price, category, imageUrl } = req.body;
 
-   if (!ObjectId.isValid(artworkId)) {
-      return res.status(400).json({ success: false, message: "Invalid Artwork ID Format" });
+    if (!ObjectId.isValid(artworkId)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid Artwork ID Format" });
     }
 
     const updateData = {
       $set: {
         title: title.trim(),
         description: description,
-        price: Number(price), 
+        price: Number(price),
         category: category,
         imageUrl: imageUrl,
-        updatedAt: new Date() 
-      }
+        updatedAt: new Date(),
+      },
     };
 
     const result = await artworkCollection.updateOne(
-      { _id: new ObjectId(artworkId) }, 
-      updateData
+      { _id: new ObjectId(artworkId) },
+      updateData,
     );
 
     if (result.matchedCount === 1) {
-      res.json({ success: true, message: "Artwork updated successfully in database!" });
+      res.json({
+        success: true,
+        message: "Artwork updated successfully in database!",
+      });
     } else {
-      res.status(404).json({ success: false, message: "Artwork not found in database" });
+      res
+        .status(404)
+        .json({ success: false, message: "Artwork not found in database" });
     }
-
   } catch (error) {
     console.error("Database Update Error:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
@@ -253,8 +270,8 @@ app.delete("/artworks/:id", async (req, res) => {
 });
 
 // purchase
-app.get("/purchase",async(req,res)=>{
-try {
+app.get("/purchase", async (req, res) => {
+  try {
     if (!purchaseCollection) {
       return res
         .status(500)
@@ -280,7 +297,6 @@ try {
       }
     }
 
-
     // if (search) {
     //   query.$or = [
     //     { title: { $regex: search, $options: "i" } },
@@ -292,16 +308,19 @@ try {
 
     res.status(200).json({
       success: true,
-      data: result
+      data: result,
     });
-
   } catch (error) {
     console.error("Error fetching purchase:", error);
     res
       .status(500)
-      .json({ success: false, message: "Internal Server Error", error: error.message });
+      .json({
+        success: false,
+        message: "Internal Server Error",
+        error: error.message,
+      });
   }
-})
+});
 
 app.post("/purchase", async (req, res, next) => {
   const session = client.startSession();
@@ -314,11 +333,9 @@ app.post("/purchase", async (req, res, next) => {
 
     const { artworkId, buyerId, amount, status, salingDate } = req.body;
     if (!artworkId || !buyerId || !amount) {
-      return res
-        .status(400)
-        .json({
-          message: "Missing required fields (artworkId, buyerId, amount)",
-        });
+      return res.status(400).json({
+        message: "Missing required fields (artworkId, buyerId, amount)",
+      });
     }
     session.startTransaction();
     const saleResult = await purchaseCollection.insertOne(newSale, { session });
@@ -347,6 +364,131 @@ app.post("/purchase", async (req, res, next) => {
       .json({ message: "Internal Server Error", error: error.message });
   } finally {
     await session.endSession();
+  }
+});
+//plans
+app.get("/plans", async (req, res) => {
+  try {
+    if (!plansCollection) {
+      return res
+        .status(500)
+        .json({ message: "Database collection not initialized" });
+    }
+
+    let query = {};
+    const { planId } = req.query;
+
+    query.id = planId ?? "user_free";
+
+    const result = await plansCollection.find(query).toArray();
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching purchase:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Internal Server Error",
+        error: error.message,
+      });
+  }
+});
+// subscriptions
+app.post("/subscriptions", async (req, res, next) => {
+  const session = client.startSession();
+  try {
+    if (!subscriptionCollection) {
+      return res
+        .status(500)
+        .json({ message: "Database collections not initialized" });
+    }
+    const data=req.body;
+    const subInfo={
+      ...data,createAt:new Date()
+    }
+    const result= await subscriptionCollection.insertOne(subInfo);
+    const filter={email:subInfo?.email};
+
+   const updateResult = await userCollection.updateOne(
+      { email: subInfo?.email },
+      { $set: { plan: subInfo?.planId } } 
+    );
+
+    if (updateResult.modifiedCount === 0) {
+      return res.status(404).json({ success: false, message: "User not found or tier already updated" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Subscription and User Plan updated successfully!"
+    });
+  } catch (error) {
+    console.error("Transaction aborted due to error:", error);
+    if (session.inTransaction()) {
+      await session.abortTransaction();
+    }
+
+    res
+      .status(500)
+      .json({ message: "Internal Server Error", error: error.message });
+  } finally {
+    await session.endSession();
+  }
+});
+// reviews
+app.get("/reviews", async (req, res) => {
+  try {
+    if (!reviewsCollection) {
+      return res
+        .status(500)
+        .json({ message: "Database collection not initialized" });
+    }
+
+    let query = {};
+    const { id, search, userId } = req.query;
+
+    if (id) {
+      if (ObjectId.isValid(id)) {
+        query._id = new ObjectId(id);
+      } else {
+        query._id = id;
+      }
+    }
+
+    if (userId) {
+      if (ObjectId.isValid(userId)) {
+        query.artistId = new ObjectId(userId);
+      } else {
+        query.artistId = userId;
+      }
+    }
+
+    // if (search) {
+    //   query.$or = [
+    //     { title: { $regex: search, $options: "i" } },
+    //     { artistName: { $regex: search, $options: "i" } },
+    //   ];
+    // }
+
+    const result = await reviewsCollection.find(query).toArray();
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching purchase:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Internal Server Error",
+        error: error.message,
+      });
   }
 });
 // App server activation listener block
