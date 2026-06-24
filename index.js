@@ -62,24 +62,24 @@ const verifyToken = async (req, res, next) => {
   next();
 };
 
-let artworkCollection;
-let purchaseCollection;
-let reviewsCollection;
-let plansCollection;
-let subscriptionCollection;
-let userCollection;
+let artworkCollection,
+  purchaseCollection,
+  reviewsCollection,
+  plansCollection,
+  subscriptionCollection,
+  userCollection;
 // 7. Establish Connection to Database Instance Layer
 async function dbConnection() {
   try {
     await client.connect();
 
     const db = client.db(process.env.MONGO_DB);
-    userCollection=db.collection('user');
+    userCollection = db.collection("user");
     artworkCollection = db.collection("artworks");
     purchaseCollection = db.collection("purchase");
     reviewsCollection = db.collection("reviews");
     plansCollection = db.collection("plans");
-    subscriptionCollection=db.collection("subscriptions");
+    subscriptionCollection = db.collection("subscriptions");
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
@@ -93,6 +93,27 @@ dbConnection().catch(console.dir);
 app.get("/", (req, res) => {
   res.send("Hello World!");
 });
+//user
+app.get("/user",async(req,res)=>{
+  try{
+    if(!userCollection){
+      return res.status(500).json({message:"Database collection not initialized"});
+    }
+    const result= await userCollection.find().toArray();
+    res.status(200).json({
+      success:true,
+      data:result
+    })
+  }
+catch(error){
+  console.error("Error fetching user:",error);
+  res.status(500).json({
+    success:false,
+    message:"Internal Server Error",
+    error: error.message,
+  })
+}
+})
 // artworks
 app.get("/artworks", async (req, res) => {
   try {
@@ -140,13 +161,11 @@ app.get("/artworks", async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching artworks:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Internal Server Error",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
   }
 });
 app.post("/artworks", async (req, res) => {
@@ -312,13 +331,11 @@ app.get("/purchase", async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching purchase:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Internal Server Error",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
   }
 });
 
@@ -388,13 +405,11 @@ app.get("/plans", async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching purchase:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Internal Server Error",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
   }
 });
 // subscriptions
@@ -406,25 +421,31 @@ app.post("/subscriptions", async (req, res, next) => {
         .status(500)
         .json({ message: "Database collections not initialized" });
     }
-    const data=req.body;
-    const subInfo={
-      ...data,createAt:new Date()
-    }
-    const result= await subscriptionCollection.insertOne(subInfo);
-    const filter={email:subInfo?.email};
+    const data = req.body;
+    const subInfo = {
+      ...data,
+      createAt: new Date(),
+    };
+    const result = await subscriptionCollection.insertOne(subInfo);
+    const filter = { email: subInfo?.email };
 
-   const updateResult = await userCollection.updateOne(
+    const updateResult = await userCollection.updateOne(
       { email: subInfo?.email },
-      { $set: { plan: subInfo?.planId } } 
+      { $set: { plan: subInfo?.planId } },
     );
 
     if (updateResult.modifiedCount === 0) {
-      return res.status(404).json({ success: false, message: "User not found or tier already updated" });
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "User not found or tier already updated",
+        });
     }
 
     return res.status(200).json({
       success: true,
-      message: "Subscription and User Plan updated successfully!"
+      message: "Subscription and User Plan updated successfully!",
     });
   } catch (error) {
     console.error("Transaction aborted due to error:", error);
@@ -482,13 +503,11 @@ app.get("/reviews", async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching purchase:", error);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Internal Server Error",
-        error: error.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
   }
 });
 // App server activation listener block
