@@ -1,29 +1,21 @@
-// 1. Load environment variables at the very beginning
 const dotenv = require("dotenv");
 dotenv.config();
 
-// 2. Import core modules
 const express = require("express");
 const cors = require("cors");
 const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
-
-// FIX: Always require "mongodb" string, not env variable
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const { success } = require("better-auth");
 
-// 3. Initialize Express app instance
 const app = express();
 
-// 4. Setup Global Middlewares
+// Configuration Globals
+const port = process.env.PORT || 3001;
+const uri = process.env.MONGO_DB_URI;
+const JWKS = `${process.env.CLIENT_URL}/api/auth/jwks`;
+
 app.use(cors());
 app.use(express.json());
 
-// 5. Environmental configurations
-const port = process.env.PORT || 3001; // Fallback default to 3001 if undefined
-const uri = process.env.MONGO_DB_URI; // FIX: Matching your .env name
-const JWKS = `${process.env.CLIENT_URL}/api/auth/jwks`;
-
-// 6. MongoDB Client instance initializer
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -32,660 +24,360 @@ const client = new MongoClient(uri, {
   },
 });
 
-// Request logger middleware
-const logger = (req, res, next) => {
-  console.log(`${req.method} ${req.url}`);
-  next();
-};
+// Database State Containers
+let db, collections = {};
 
-// Security token verification custom routing gate
-const verifyToken = async (req, res, next) => {
-  const { authorization } = req.headers;
-
-  if (!authorization || !authorization.startsWith("Bearer ")) {
-    return res.status(401).json({ message: "Unauthorized! Token missing." });
-  }
-  const token = authorization.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-  try {
-    const jwks = createRemoteJWKSet(new URL(JWKS));
-    const { payload } = await jwtVerify(token, jwks);
-    req.user = payload;
-    console.log(req.user);
-  } catch (error) {
-    console.error("Token validation failed:", error);
-    return res.status(401).json({ message: "Unauthorized" });
-  }
-  next();
-};
-
-let artworkCollection,
-  purchaseCollection,
-  reviewsCollection,
-  plansCollection,
-  subscriptionCollection,
-  userCollection,categoryCollection,orderCollection;
-// 7. Establish Connection to Database Instance Layer
 async function dbConnection() {
   try {
     await client.connect();
-
-    const db = client.db(process.env.MONGO_DB);
-    userCollection = db.collection("user");
-    categoryCollection=db.collection('category');
-    artworkCollection = db.collection("artworks");
-    purchaseCollection = db.collection("purchase");
-    reviewsCollection = db.collection("reviews");
-    plansCollection = db.collection("plans");
-    orderCollection=db.collection('orders');
-    subscriptionCollection = db.collection("subscriptions");
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!",
-    );
+    db = client.db(process.env.MONGO_DB);
+    
+    // Core Collection Initializations
+    collections.user = db.collection("user");
+    collections.category = db.collection("category");
+    collections.artworks = db.collection("artworks");
+    collections.reviews = db.collection("reviews");
+    collections.plans = db.collection("plans");
+    collections.orders = db.collection("orders");
+    collections.subscriptions = db.collection("subscriptions");
+    
+    console.log("Pinged deployment. Successfully connected to MongoDB!");
   } catch (error) {
     console.error("Database initialization failed:", error);
   }
 }
 dbConnection().catch(console.dir);
 
-// Base application check points
-app.get("/", (req, res) => {
-  res.send("Hello World!");
-});
-//user
-app.get("/user",async(req,res)=>{
-  try{
-    if(!userCollection){
-      return res.status(500).json({message:"Database collection not initialized"});
-    }
-    const result= await userCollection.find().toArray();
-    res.status(200).json({
-      success:true,
-      data:result
-    })
-  }
-catch(error){
-  console.error("Error fetching user:",error);
-  res.status(500).json({
-    success:false,
-    message:"Internal Server Error",
-    error: error.message,
-  })
-}
-})
-// artworks
-
-app.get("/artworks", async (req, res) => {
-  try {
-    if (!artworkCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database collection not initialized" });
-    }
-
-    let query = {};
-    const { id, search, userId, features } = req.query;
-
-    if (id) {
-      if (ObjectId.isValid(id)) {
-        query._id = new ObjectId(id);
-      } else {
-        query._id = id;
-      }
-    }
-
-    if (userId) {
-      if (ObjectId.isValid(userId)) {
-        query.artistId = new ObjectId(userId);
-      } else {
-        query.artistId = userId;
-      }
-    }
-
-    if (features) {
-      query.features = features === "true";
-    }
-
-    if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: "i" } },
-        { artistName: { $regex: search, $options: "i" } },
-      ];
-    }
-
-    const result = await artworkCollection.find(query).toArray();
-
-    res.status(200).json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    console.error("Error fetching artworks:", error);
+// Global Reusable Boilerplate Utilities
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch((error) => {
+    console.error("Route Error:", error);
     res.status(500).json({
       success: false,
       message: "Internal Server Error",
       error: error.message,
     });
+  });
+};
+
+const checkDb = (collectionName) => (req, res, next) => {
+  if (!collections[collectionName]) {
+    return res.status(500).json({ message: `Database collection '${collectionName}' not initialized` });
   }
-});
-app.get("/aprovedArtworks", async (req, res) => {
+  req.targetCollection = collections[collectionName];
+  next();
+};
+
+const parseIdQuery = (idStr) => {
+  if (!idStr) return null;
+  return ObjectId.isValid(idStr) ? new ObjectId(idStr) : idStr;
+};
+
+// Security Gateway Token Verification
+const verifyToken = async (req, res, next) => {
+  const { authorization } = req.headers;
+  if (!authorization || !authorization.startsWith("Bearer ")) {
+    return res.status(401).json({ message: "Unauthorized! Token missing." });
+  }
+  
+  const token = authorization.split(" ")[1];
+  if (!token) return res.status(401).json({ message: "Unauthorized" });
+
   try {
-    if (!artworkCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database collection not initialized" });
-    }
-
-    let query = {
-      status: { $in: ["available", "unavailable"] }
-    };
-    
-    const { id, search, userId, features } = req.query;
-
-    if (id) {
-      if (ObjectId.isValid(id)) {
-        query._id = new ObjectId(id);
-      } else {
-        query._id = id;
-      }
-    }
-
-    if (userId) {
-      if (ObjectId.isValid(userId)) {
-        query.artistId = new ObjectId(userId);
-      } else {
-        query.artistId = userId;
-      }
-    }
-
-    if (features) {
-      query.features = features === "true";
-    }
-
-    if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: "i" } },
-        { artistName: { $regex: search, $options: "i" } },
-      ];
-    }
-
-    const result = await artworkCollection.find(query).toArray();
-
-    res.status(200).json({
-      success: true,
-      data: result,
-    });
+    const jwks = createRemoteJWKSet(new URL(JWKS));
+    const { payload } = await jwtVerify(token, jwks);
+    req.user = payload;
+    next();
   } catch (error) {
-    console.error("Error fetching artworks:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-      error: error.message,
+    console.error("Token validation failed:", error);
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+};
+
+// Base Endpoint Health Check
+app.get("/", (req, res) => res.send("Hello World!"));
+
+// Users Route Layer
+app.get("/user", checkDb("user"), asyncHandler(async (req, res) => {
+  const result = await req.targetCollection.find().toArray();
+  res.status(200).json({ success: true, data: result });
+}));
+
+// Unified Artworks Query Logic
+app.get("/artworks", checkDb("artworks"), asyncHandler(async (req, res) => {
+  const { id, search, userId, features, approvedOnly } = req.query;
+  let query = {};
+
+  if (approvedOnly === "true") {
+    query.status = { $in: ["available", "unavailable"] };
+  }
+
+  const parsedId = parseIdQuery(id);
+  if (parsedId) query._id = parsedId;
+
+  const parsedArtistId = parseIdQuery(userId);
+  if (parsedArtistId) query.artistId = parsedArtistId;
+
+  if (features) {
+    query.features = features === "true";
+  }
+
+  if (search) {
+    query.$or = [
+      { title: { $regex: search, $options: "i" } },
+      { artistName: { $regex: search, $options: "i" } },
+    ];
+  }
+
+  const result = await req.targetCollection.find(query).toArray();
+  res.status(200).json({ success: true, data: result });
+}));
+
+app.post("/artworks", checkDb("artworks"), asyncHandler(async (req, res) => {
+  const { title, artistId, artistName, description, price, category, imageUrl, features } = req.body;
+
+  if (!title || !artistId || !price || !category || !imageUrl) {
+    return res.status(400).json({
+      message: "Missing required fields (title, artistId, price, category, imageUrl)",
     });
   }
-});
-app.post("/artworks", async (req, res) => {
-  try {
-    if (!artworkCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database artworks collection not initialized" });
-    }
 
-    const {
-      title,
-      artistId,
-      artistName,
-      description,
-      price,
-      category,
-      imageUrl,
-      features,
-    } = req.body;
+  const newArtwork = {
+    title: title.trim(),
+    artistId: new ObjectId(artistId),
+    artistName: artistName || "",
+    description: description || "",
+    price: Number(price),
+    category,
+    imageUrl,
+    features: features === true || features === "true",
+    status: "pending",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
 
-    if (!title || !artistId || !price || !category || !imageUrl) {
-      return res.status(400).json({
-        message:
-          "Missing required fields (title, artistId, price, category, imageUrl)",
-      });
-    }
+  const result = await req.targetCollection.insertOne(newArtwork);
+  res.status(201).json({ success: true, message: "Artwork uploaded successfully.", artworkId: result.insertedId });
+}));
 
-    const newArtwork = {
-      title: title.trim(),
-      artistId: new ObjectId(artistId),
-      artistName: artistName || "",
-      description: description || "",
-      price: Number(price),
-      category: category,
-      imageUrl: imageUrl,
-      features: features === true || features === "true",
-      status: "pending",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+app.put("/artworks/:id", checkDb("artworks"), asyncHandler(async (req, res) => {
+  const artworkId = req.params.id;
+  const { title, description, price, category, imageUrl } = req.body;
 
-    const result = await artworkCollection.insertOne(newArtwork);
-
-    res.status(201).json({
-      success: true,
-      message: "Artwork uploaded successfully.",
-      artworkId: result.insertedId,
-    });
-  } catch (error) {
-    console.error("Error inserting artwork:", error);
-    res
-      .status(500)
-      .json({ message: "Internal Server Error", error: error.message });
+  if (!ObjectId.isValid(artworkId)) {
+    return res.status(400).json({ success: false, message: "Invalid Artwork ID Format" });
   }
-});
-app.put("/artworks/:id", async (req, res) => {
-  try {
-    const artworkId = req.params.id;
-    console.log("artworkId: ", artworkId);
-    const { title, description, price, category, imageUrl } = req.body;
 
-    if (!ObjectId.isValid(artworkId)) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid Artwork ID Format" });
-    }
-
-    const updateData = {
+  const result = await req.targetCollection.updateOne(
+    { _id: new ObjectId(artworkId) },
+    {
       $set: {
         title: title.trim(),
-        description: description,
+        description,
         price: Number(price),
-        category: category,
-        imageUrl: imageUrl,
+        category,
+        imageUrl,
         updatedAt: new Date(),
       },
-    };
-
-    const result = await artworkCollection.updateOne(
-      { _id: new ObjectId(artworkId) },
-      updateData,
-    );
-
-    if (result.matchedCount === 1) {
-      res.json({
-        success: true,
-        message: "Artwork updated successfully in database!",
-      });
-    } else {
-      res
-        .status(404)
-        .json({ success: false, message: "Artwork not found in database" });
     }
-  } catch (error) {
-    console.error("Database Update Error:", error);
-    res.status(500).json({ success: false, message: "Internal server error" });
+  );
+
+  if (result.matchedCount === 1) {
+    res.json({ success: true, message: "Artwork updated successfully in database!" });
+  } else {
+    res.status(404).json({ success: false, message: "Artwork not found in database" });
   }
-});
-app.delete("/artworks/:id", async (req, res) => {
-  const id = req.params.id;
-  try {
-    if (!artworkCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database collections not initialized" });
-    }
-    const result = await artworkCollection.deleteOne({ _id: new ObjectId(id) });
-    if (result.deletedCount === 1) {
-      res.json({
-        success: true,
-        message: "Artwork deleted successfully from database",
-      });
-    } else {
-      res.status(404).json({ success: false, message: "Artwork not found" });
-    }
-  } catch (error) {
-    console.error("Error deleting artwork:", error);
-    res.status(500).json({ success: false, message: "Server error" });
+}));
+
+app.patch("/artworks", checkDb("artworks"), asyncHandler(async (req, res) => {
+  const { artId } = req.query;
+  const { status } = req.body;
+
+  if (!artId || !status) {
+    return res.status(400).json({ success: false, message: "Artwork ID and Status values are required" });
   }
-});
-app.patch('/artworks', async (req, res) => {
-  try {
-    const artId = req.query.artId;
 
-    if (!artId) {
-      return res.status(400).json({
-        success: false,
-        message: "Artwork ID is required in query parameters"
-      });
-    }
+  await req.targetCollection.updateOne({ _id: new ObjectId(artId) }, { $set: { status } });
+  return res.status(200).json({ success: true, message: "Artwork status updated successfully" });
+}));
 
-    const { status } = req.body;
-
-
-    if (!status) {
-      return res.status(400).json({
-        success: false,
-        message: "Status is required in request body"
-      });
-    }
-      const result = await artworkCollection.updateOne(
-      { _id: new ObjectId(artId) },
-       { $set: { status: status } },
-    );
-
-    return res.status(200).json({
-      success: true,
-      message: "Artwork status updated successfully",
-    });
-
-  } catch (error) {
-    console.error("Express PATCH error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Internal Server Error"
-    });
+app.delete("/artworks/:id", checkDb("artworks"), asyncHandler(async (req, res) => {
+  const result = await req.targetCollection.deleteOne({ _id: new ObjectId(req.params.id) });
+  if (result.deletedCount === 1) {
+    res.json({ success: true, message: "Artwork deleted successfully from database" });
+  } else {
+    res.status(404).json({ success: false, message: "Artwork not found" });
   }
-});
-// category
-app.get('/category',async(req,res)=>{
-  try {
-    if (!categoryCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database collection not initialized" });
-    }
+}));
 
-  const result = await categoryCollection.find().toArray();
+// Categories Route Layer
+app.get("/category", checkDb("category"), asyncHandler(async (req, res) => {
+  const result = await req.targetCollection.find().toArray();
+  res.status(200).json({ success: true, data: result });
+}));
 
-    res.status(200).json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    console.error("Error fetching category:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-      error: error.message,
-    });
+// Orders Management Layer
+app.post("/artwork-orders", checkDb("orders"), asyncHandler(async (req, res) => {
+  const { email, artworkId, userId, amount, paymentIntentId, purchasedAt } = req.body;
+
+  if (!artworkId || !email) {
+    return res.status(400).json({ success: false, message: "Missing required fields" });
   }
-})
-// orders
-app.post('/artwork-orders', async (req, res) => {
-  try {
-    if (!orderCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database collection not initialized" });
-    }
-    const { email, artworkId, userId, amount, paymentIntentId, purchasedAt } = req.body;
 
-    if (!artworkId || !email) {
-      return res.status(400).json({ success: false, message: "Missing required fields" });
-    }
+  const newOrder = {
+    buyerEmail: email,
+    buyerId: userId ? new ObjectId(userId) : null,
+    artworkId: new ObjectId(artworkId),
+    amount: parseFloat(amount),
+    paymentIntentId,
+    status: "completed",
+    purchasedAt: purchasedAt ? new Date(purchasedAt) : new Date(),
+  };
 
-    const newOrder = {
-      buyerEmail: email,
-      buyerId: userId ? new ObjectId(userId) : null,
-      artworkId: new ObjectId(artworkId),
-      amount: parseFloat(amount),
-      paymentIntentId: paymentIntentId,
-      status: "completed",
-      purchasedAt: purchasedAt ? new Date(purchasedAt) : new Date()
-    };
+  const orderResult = await req.targetCollection.insertOne(newOrder);
+  const artworkUpdateResult = await collections.artworks.updateOne(
+    { _id: new ObjectId(artworkId) },
+    { $set: { status: "sold", buyerEmail: email, soldAt: new Date() } }
+  );
 
-    const orderResult = await orderCollection.insertOne(newOrder);
+  if (orderResult.insertedId && artworkUpdateResult.modifiedCount > 0) {
+    return res.status(201).json({ success: true, message: "Order placed successfully!", orderId: orderResult.insertedId });
+  } else {
+    return res.status(500).json({ success: false, message: "Failed to cleanly complete atomic order operations." });
+  }
+}));
 
-    const artworkUpdateResult = await artworkCollection.updateOne(
-      { _id: new ObjectId(artworkId) },
-      { 
-        $set: { 
-          status: 'sold',           
-          buyerEmail: email,
-          soldAt: new Date()
-        } 
+app.get("/my-orders", checkDb("orders"), asyncHandler(async (req, res) => {
+  const { email } = req.query;
+  if (!email) return res.status(400).json({ success: false, message: "Email query parameter is required" });
+
+  const orders = await req.targetCollection.aggregate([
+    { $match: { buyerEmail: email, status: "completed" } },
+    { $lookup: { from: "artworks", localField: "artworkId", foreignField: "_id", as: "artworkDetails" } },
+    { $unwind: "$artworkDetails" },
+    { $sort: { purchasedAt: -1 } },
+  ]).toArray();
+
+  return res.status(200).json({ success: true, count: orders.length, data: orders });
+}));
+app.get("/admin/transactions", asyncHandler(async (req, res) => {
+  const orders = await collections.orders.find().toArray();
+  const purchaseTransactions = orders.map(order => ({
+    transactionId: order.paymentIntentId || order._id,
+    type: "PURCHASE", 
+    email: order.buyerEmail,
+    date: order.purchasedAt,
+    amount: order.amount
+  }));
+
+  const subscriptions = await collections.subscriptions.find().toArray();
+  const subscriptionTransactions = subscriptions.map(sub => ({
+    transactionId: sub.paymentIntentId || sub.subscriptionId || sub._id,
+    type: "SUBSCRIPTION", 
+    email: sub.email,
+    date: sub.createdAt || sub.purchasedAt, 
+    amount: sub.amount || 0
+  }));
+
+  const combinedTransactions = [...purchaseTransactions, ...subscriptionTransactions].sort(
+    (a, b) => new Date(b.date) - new Date(a.date)
+  );
+
+  res.status(200).json({
+    success: true,
+    count: combinedTransactions.length,
+    data: combinedTransactions
+  });
+}));
+app.get("/admin/orders", checkDb("orders"), asyncHandler(async (req, res) => {
+  const orders = await req.targetCollection.aggregate([
+    {
+      $lookup: {
+        from: "artworks",
+        localField: "artworkId",
+        foreignField: "_id",
+        as: "artworkDetails"
       }
-    );
+    },
+    { $unwind: { path: "$artworkDetails", preserveNullAndEmptyArrays: true } },
+    { $sort: { purchasedAt: -1 } }
+  ]).toArray();
 
-    if (orderResult.insertedId && artworkUpdateResult.modifiedCount > 0) {
-      return res.status(201).json({
-        success: true,
-        message: "Order placed successfully and artwork status updated to SOLD!",
-        orderId: orderResult.insertedId
-      });
-    } else {
-      return res.status(500).json({ 
-        success: false, 
-        message: "Order saved but failed to update artwork status." 
-      });
-    }
+  res.status(200).json({
+    success: true,
+    count: orders.length,
+    data: orders
+  });
+}));
+app.get("/sales-history", checkDb("orders"), asyncHandler(async (req, res) => {
+  const { artistId } = req.query;
+  if (!artistId) return res.status(400).json({ success: false, message: "Artist ID query parameter is required" });
 
-  } catch (error) {
-    console.error("Backend Error in artwork-orders:", error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-// purchase
-app.get("/purchase", async (req, res) => {
-  try {
-    if (!purchaseCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database collection not initialized" });
-    }
+  const sales = await req.targetCollection.aggregate([
+    { $lookup: { from: "artworks", localField: "artworkId", foreignField: "_id", as: "artworkDetails" } },
+    { $unwind: "$artworkDetails" },
+    { $match: { status: "completed", "artworkDetails.artistId": artistId } },
+    { $sort: { purchasedAt: -1 } },
+  ]).toArray();
 
-    let query = {};
-    const { id, search, userId } = req.query;
+  const totalEarnings = sales.reduce((sum, item) => sum + (item.amount || 0), 0);
+  res.status(200).json({ success: true, count: sales.length, totalEarnings, data: sales });
+}));
 
-    if (id) {
-      if (ObjectId.isValid(id)) {
-        query._id = new ObjectId(id);
-      } else {
-        query._id = id;
-      }
-    }
+// Plans Route Layer
+app.get("/plans", checkDb("plans"), asyncHandler(async (req, res) => {
+  const { planId } = req.query;
+  const result = await req.targetCollection.find({ id: planId ?? "user_free" }).toArray();
+  res.status(200).json({ success: true, data: result });
+}));
 
-    if (userId) {
-      if (ObjectId.isValid(userId)) {
-        query.artistId = new ObjectId(userId);
-      } else {
-        query.artistId = userId;
-      }
-    }
+// Subscriptions & Memberships Layer
+app.post("/subscriptions", checkDb("subscriptions"), asyncHandler(async (req, res) => {
+  const data = req.body;
 
-    // if (search) {
-    //   query.$or = [
-    //     { title: { $regex: search, $options: "i" } },
-    //     { artistName: { $regex: search, $options: "i" } },
-    //   ];
-    // }
+  const subInfo = {
+    email: data.email,
+    planId: data.planId,
+    amount: data.amount ?? parseFloat(data.amount),
+    paymentIntentId: data.paymentIntentId || data.subscriptionId || null, 
+    createdAt: new Date() 
+  };
 
-    const result = await purchaseCollection.find(query).toArray();
+  await req.targetCollection.insertOne(subInfo);
+  
+  const updateResult = await collections.user.updateOne(
+    { email: subInfo.email },
+    { $set: { plan: subInfo.planId } }
+  );
 
-    res.status(200).json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    console.error("Error fetching purchase:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-      error: error.message,
+  if (updateResult.modifiedCount === 0) {
+    return res.status(404).json({ 
+      success: false, 
+      message: "User tier already matches target or user profile missing" 
     });
   }
-});
 
-app.post("/purchase", async (req, res, next) => {
-  const session = client.startSession();
-  try {
-    if (!purchaseCollection || !artworkCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database collections not initialized" });
-    }
+  return res.status(200).json({ 
+    success: true, 
+    message: "Subscription and User Plan updated successfully!" 
+  });
+}));
 
-    const { artworkId, buyerId, amount, status, salingDate } = req.body;
-    if (!artworkId || !buyerId || !amount) {
-      return res.status(400).json({
-        message: "Missing required fields (artworkId, buyerId, amount)",
-      });
-    }
-    session.startTransaction();
-    const saleResult = await purchaseCollection.insertOne(newSale, { session });
-    const artworkUpdateResult = await artworkCollection.updateOne(
-      { _id: artworkId },
-      { $set: { status: "sold", updatedAt: new Date().toISOString() } },
-      { session },
-    );
-    if (artworkUpdateResult.matchedCount === 0) {
-      throw new Error("Artwork not found with the provided ID");
-    }
-    await session.commitTransaction();
-    res.status(201).json({
-      success: true,
-      message: "Sale recorded successfully and artwork status updated to sold.",
-      saleId: saleResult.insertedId,
-    });
-  } catch (error) {
-    console.error("Transaction aborted due to error:", error);
-    if (session.inTransaction()) {
-      await session.abortTransaction();
-    }
+// Feedback & Reviews Route Layer
+app.get("/reviews", checkDb("reviews"), asyncHandler(async (req, res) => {
+  const { id, userId } = req.query;
+  let query = {};
 
-    res
-      .status(500)
-      .json({ message: "Internal Server Error", error: error.message });
-  } finally {
-    await session.endSession();
-  }
-});
-//plans
-app.get("/plans", async (req, res) => {
-  try {
-    if (!plansCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database collection not initialized" });
-    }
+  const parsedId = parseIdQuery(id);
+  if (parsedId) query._id = parsedId;
 
-    let query = {};
-    const { planId } = req.query;
+  const parsedArtistId = parseIdQuery(userId);
+  if (parsedArtistId) query.artistId = parsedArtistId;
 
-    query.id = planId ?? "user_free";
+  const result = await req.targetCollection.find(query).toArray();
+  res.status(200).json({ success: true, data: result });
+}));
 
-    const result = await plansCollection.find(query).toArray();
-
-    res.status(200).json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    console.error("Error fetching purchase:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-      error: error.message,
-    });
-  }
-});
-// subscriptions
-app.post("/subscriptions", async (req, res, next) => {
-  const session = client.startSession();
-  try {
-    if (!subscriptionCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database collections not initialized" });
-    }
-    const data = req.body;
-    const subInfo = {
-      ...data,
-      createAt: new Date(),
-    };
-    const result = await subscriptionCollection.insertOne(subInfo);
-    const filter = { email: subInfo?.email };
-
-    const updateResult = await userCollection.updateOne(
-      { email: subInfo?.email },
-      { $set: { plan: subInfo?.planId } },
-    );
-
-    if (updateResult.modifiedCount === 0) {
-      return res
-        .status(404)
-        .json({
-          success: false,
-          message: "User not found or tier already updated",
-        });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Subscription and User Plan updated successfully!",
-    });
-  } catch (error) {
-    console.error("Transaction aborted due to error:", error);
-    if (session.inTransaction()) {
-      await session.abortTransaction();
-    }
-
-    res
-      .status(500)
-      .json({ message: "Internal Server Error", error: error.message });
-  } finally {
-    await session.endSession();
-  }
-});
-// reviews
-app.get("/reviews", async (req, res) => {
-  try {
-    if (!reviewsCollection) {
-      return res
-        .status(500)
-        .json({ message: "Database collection not initialized" });
-    }
-
-    let query = {};
-    const { id, search, userId } = req.query;
-
-    if (id) {
-      if (ObjectId.isValid(id)) {
-        query._id = new ObjectId(id);
-      } else {
-        query._id = id;
-      }
-    }
-
-    if (userId) {
-      if (ObjectId.isValid(userId)) {
-        query.artistId = new ObjectId(userId);
-      } else {
-        query.artistId = userId;
-      }
-    }
-
-    // if (search) {
-    //   query.$or = [
-    //     { title: { $regex: search, $options: "i" } },
-    //     { artistName: { $regex: search, $options: "i" } },
-    //   ];
-    // }
-
-    const result = await reviewsCollection.find(query).toArray();
-
-    res.status(200).json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    console.error("Error fetching purchase:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-      error: error.message,
-    });
-  }
-});
-// App server activation listener block
 app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`);
+  console.log(`Application server runtime online on port: ${port}`);
 });
