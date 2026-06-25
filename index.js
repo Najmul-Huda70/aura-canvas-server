@@ -67,7 +67,7 @@ let artworkCollection,
   reviewsCollection,
   plansCollection,
   subscriptionCollection,
-  userCollection;
+  userCollection,categoryCollection,orderCollection;
 // 7. Establish Connection to Database Instance Layer
 async function dbConnection() {
   try {
@@ -75,10 +75,12 @@ async function dbConnection() {
 
     const db = client.db(process.env.MONGO_DB);
     userCollection = db.collection("user");
+    categoryCollection=db.collection('category');
     artworkCollection = db.collection("artworks");
     purchaseCollection = db.collection("purchase");
     reviewsCollection = db.collection("reviews");
     plansCollection = db.collection("plans");
+    orderCollection=db.collection('orders');
     subscriptionCollection = db.collection("subscriptions");
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
@@ -115,6 +117,7 @@ catch(error){
 }
 })
 // artworks
+
 app.get("/artworks", async (req, res) => {
   try {
     if (!artworkCollection) {
@@ -124,6 +127,62 @@ app.get("/artworks", async (req, res) => {
     }
 
     let query = {};
+    const { id, search, userId, features } = req.query;
+
+    if (id) {
+      if (ObjectId.isValid(id)) {
+        query._id = new ObjectId(id);
+      } else {
+        query._id = id;
+      }
+    }
+
+    if (userId) {
+      if (ObjectId.isValid(userId)) {
+        query.artistId = new ObjectId(userId);
+      } else {
+        query.artistId = userId;
+      }
+    }
+
+    if (features) {
+      query.features = features === "true";
+    }
+
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { artistName: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const result = await artworkCollection.find(query).toArray();
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching artworks:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  }
+});
+app.get("/aprovedArtworks", async (req, res) => {
+  try {
+    if (!artworkCollection) {
+      return res
+        .status(500)
+        .json({ message: "Database collection not initialized" });
+    }
+
+    let query = {
+      status: { $in: ["available", "unavailable"] }
+    };
+    
     const { id, search, userId, features } = req.query;
 
     if (id) {
@@ -203,7 +262,7 @@ app.post("/artworks", async (req, res) => {
       category: category,
       imageUrl: imageUrl,
       features: features === true || features === "true",
-      status: "available",
+      status: "pending",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
@@ -287,7 +346,123 @@ app.delete("/artworks/:id", async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
+app.patch('/artworks', async (req, res) => {
+  try {
+    const artId = req.query.artId;
 
+    if (!artId) {
+      return res.status(400).json({
+        success: false,
+        message: "Artwork ID is required in query parameters"
+      });
+    }
+
+    const { status } = req.body;
+
+
+    if (!status) {
+      return res.status(400).json({
+        success: false,
+        message: "Status is required in request body"
+      });
+    }
+      const result = await artworkCollection.updateOne(
+      { _id: new ObjectId(artId) },
+       { $set: { status: status } },
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Artwork status updated successfully",
+    });
+
+  } catch (error) {
+    console.error("Express PATCH error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error"
+    });
+  }
+});
+// category
+app.get('/category',async(req,res)=>{
+  try {
+    if (!categoryCollection) {
+      return res
+        .status(500)
+        .json({ message: "Database collection not initialized" });
+    }
+
+  const result = await categoryCollection.find().toArray();
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error fetching category:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  }
+})
+// orders
+app.post('/artwork-orders', async (req, res) => {
+  try {
+    if (!orderCollection) {
+      return res
+        .status(500)
+        .json({ message: "Database collection not initialized" });
+    }
+    const { email, artworkId, userId, amount, paymentIntentId, purchasedAt } = req.body;
+
+    if (!artworkId || !email) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const newOrder = {
+      buyerEmail: email,
+      buyerId: userId ? new ObjectId(userId) : null,
+      artworkId: new ObjectId(artworkId),
+      amount: parseFloat(amount),
+      paymentIntentId: paymentIntentId,
+      status: "completed",
+      purchasedAt: purchasedAt ? new Date(purchasedAt) : new Date()
+    };
+
+    const orderResult = await orderCollection.insertOne(newOrder);
+
+    const artworkUpdateResult = await artworkCollection.updateOne(
+      { _id: new ObjectId(artworkId) },
+      { 
+        $set: { 
+          status: 'sold',           
+          buyerEmail: email,
+          soldAt: new Date()
+        } 
+      }
+    );
+
+    if (orderResult.insertedId && artworkUpdateResult.modifiedCount > 0) {
+      return res.status(201).json({
+        success: true,
+        message: "Order placed successfully and artwork status updated to SOLD!",
+        orderId: orderResult.insertedId
+      });
+    } else {
+      return res.status(500).json({ 
+        success: false, 
+        message: "Order saved but failed to update artwork status." 
+      });
+    }
+
+  } catch (error) {
+    console.error("Backend Error in artwork-orders:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 // purchase
 app.get("/purchase", async (req, res) => {
   try {
