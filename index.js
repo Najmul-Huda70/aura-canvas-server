@@ -5,7 +5,7 @@ const express = require("express");
 const cors = require("cors");
 const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-
+const rateLimit = require("express-rate-limit");
 const app = express();
 
 // Configuration Globals
@@ -13,7 +13,24 @@ const port = process.env.PORT || 3001;
 const uri = process.env.MONGO_DB_URI;
 const JWKS = `${process.env.CLIENT_URL}/api/auth/jwks`;
 
-app.use(cors());
+const allowedOrigins = [
+  process.env.CLIENT_URL || "http://localhost:3000",
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS Security Policy"));
+      }
+    },
+    credentials: true,
+    optionsSuccessStatus: 200,
+  }),
+);
+
 app.use(express.json());
 
 const client = new MongoClient(uri, {
@@ -48,6 +65,18 @@ async function dbConnection() {
 }
 dbConnection().catch(console.dir);
 
+// DDoS protection
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: {
+    message: "Too many requests from this IP, please try again later.",
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use("/api/", apiLimiter);
+
 // Global Reusable Boilerplate Utilities
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch((error) => {
@@ -81,6 +110,7 @@ const verifyToken = async (req, res, next) => {
   }
   
   const token = authorization.split(" ")[1];
+  // console.log('token from backend:',token);
   if (!token) return res.status(401).json({ message: "Unauthorized" });
 
   try {
@@ -98,7 +128,7 @@ const verifyToken = async (req, res, next) => {
 app.get("/", (req, res) => res.send("Hello World!"));
 
 // Users Route Layer
-app.get("/user", checkDb("user"), asyncHandler(async (req, res) => {
+app.get("/user",verifyToken, checkDb("user"), asyncHandler(async (req, res) => {
   const result = await req.targetCollection.find().toArray();
   res.status(200).json({ success: true, data: result });
 }));
@@ -247,7 +277,7 @@ app.post("/artwork-orders", checkDb("orders"), asyncHandler(async (req, res) => 
   }
 }));
 
-app.get("/my-orders", checkDb("orders"), asyncHandler(async (req, res) => {
+app.get("/my-orders",verifyToken, checkDb("orders"), asyncHandler(async (req, res) => {
   const { email } = req.query;
   if (!email) return res.status(400).json({ success: false, message: "Email query parameter is required" });
 
@@ -260,7 +290,7 @@ app.get("/my-orders", checkDb("orders"), asyncHandler(async (req, res) => {
 
   return res.status(200).json({ success: true, count: orders.length, data: orders });
 }));
-app.get("/admin/transactions", asyncHandler(async (req, res) => {
+app.get("/admin/transactions", verifyToken, asyncHandler(async (req, res) => {
   const orders = await collections.orders.find().toArray();
   const purchaseTransactions = orders.map(order => ({
     transactionId: order.paymentIntentId || order._id,
@@ -309,14 +339,26 @@ app.get("/admin/orders", checkDb("orders"), asyncHandler(async (req, res) => {
     data: orders
   });
 }));
-app.get("/sales-history", checkDb("orders"), asyncHandler(async (req, res) => {
+app.get("/sales-history",verifyToken, checkDb("orders"), asyncHandler(async (req, res) => {
   const { artistId } = req.query;
   if (!artistId) return res.status(400).json({ success: false, message: "Artist ID query parameter is required" });
-
+let queryArtistId = artistId;
+if (ObjectId.isValid(artistId)) {
+  queryArtistId = new ObjectId(artistId);
+}
   const sales = await req.targetCollection.aggregate([
     { $lookup: { from: "artworks", localField: "artworkId", foreignField: "_id", as: "artworkDetails" } },
     { $unwind: "$artworkDetails" },
-    { $match: { status: "completed", "artworkDetails.artistId": artistId } },
+    {
+        $lookup: {
+          from: "user", 
+          localField: "buyerId",
+          foreignField: "_id",
+          as: "buyerDetails"
+        }
+      },
+      { $unwind: { path: "$buyerDetails"} },
+    { $match: { status: "completed", "artworkDetails.artistId": queryArtistId } },
     { $sort: { purchasedAt: -1 } },
   ]).toArray();
 
