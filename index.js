@@ -462,7 +462,10 @@ app.get("/reviews", checkDb("reviews"), asyncHandler(async (req, res) => {
   const result = await req.targetCollection.find(query).toArray();
   res.status(200).json({ success: true, data: result });
 }));
-module.exports = app;
+// module.exports = app;
 // app.listen(port, () => {
 //   console.log(`Application server runtime online on port: ${port}`);
 // });
+app.listen(port, "0.0.0.0", () => {
+  console.log(`Server running on port ${port}`);
+});
