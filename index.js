@@ -42,9 +42,14 @@ const client = new MongoClient(uri, {
 
 // Database State Containers
 let db, collections = {};
-
+let cachedClient = null;
+let cachedDb = null;
 async function dbConnection() {
+  if (cachedClient && cachedDb) {
+    return collections;
+  }
   try {
+    
     await client.connect();
     db = client.db(process.env.MONGO_DB);
     
@@ -61,6 +66,9 @@ async function dbConnection() {
     return collections;
   } catch (error) {
     console.error("Database initialization failed:", error);
+    cachedClient = null;
+    cachedDb = null;
+    throw error;
   }
 }
 dbConnection();
@@ -75,7 +83,9 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
 app.use("/api/", apiLimiter);
+
 app.get("/test-db", async (req, res) => {
   try {
     console.log("Testing database connection...");
