@@ -28,7 +28,7 @@ app.use(
     optionsSuccessStatus: 200,
   })
 );
-
+app.set("trust proxy", 1);
 app.use(express.json());
 
 // ─── MongoDB Client ───────────────────────────────────────────────────────────
@@ -591,7 +591,7 @@ app.get(
 // ─── Start Server ─────────────────────────────────────────────────────────────
 const server = app.listen(port, "0.0.0.0", () => {
   console.log(`=============================================`);
-  console.log(`🚀 SERVER IS SUCCESSFULLY RUNNING ON PORT: ${port}`);
+  console.log(`SERVER IS SUCCESSFULLY RUNNING ON PORT: ${port}`);
   console.log(`=============================================`);
 });
 process.on("unhandledRejection", (err) => {
