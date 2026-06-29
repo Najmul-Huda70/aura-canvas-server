@@ -73,27 +73,6 @@ async function dbConnection() {
 dbConnection();
 
 
-app.get("/test-db", async (req, res) => {
-  try {
-    console.log("Testing database connection...");
-    
-    const dbCollections = await dbConnection();
-    
-    res.status(200).json({
-      success: true,
-      message: "Congratulations! Connected to MongoDB Atlas successfully.",
-      database: process.env.MONGO_DB || "aura-db",
-      available_collections: Object.keys(dbCollections)
-    });
-  } catch (error) {
-    console.error("Test DB Route Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Database connection failed!",
-      error: error.message
-    });
-  }
-});
 // Global Reusable Boilerplate Utilities
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch((error) => {
@@ -143,7 +122,54 @@ const verifyToken = async (req, res, next) => {
 
 // Base Endpoint Health Check
 app.get("/", (req, res) => res.send("Hello World!"));
+app.get("/test-db", async (req, res) => {
+  try {
+    console.log("Testing database connection...");
+    
+    const dbCollections = await dbConnection();
+    
+    res.status(200).json({
+      success: true,
+      message: "Congratulations! Connected to MongoDB Atlas successfully.",
+      database: process.env.MONGO_DB || "aura-db",
+      available_collections: Object.keys(dbCollections)
+    });
+  } catch (error) {
+    console.error("Test DB Route Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Database connection failed!",
+      error: error.message
+    });
+  }
+});
+app.get("/env-test", (req, res) => {
+  res.json({
+    hasMongoUri: !!process.env.MONGODB_URI,
+    hasClientUrl: !!process.env.CLIENT_URL,
+  });
+});
+app.get("/mongo-test", async (req, res) => {
+  try {
+    const client = new MongoClient(process.env.MONGODB_URI);
 
+    await client.connect();
+
+    const ping = await client.db("admin").command({ ping: 1 });
+
+    res.json({
+      success: true,
+      ping,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      name: error.name,
+      message: error.message,
+      stack: error.stack,
+    });
+  }
+});
 // Users Route Layer
 app.get("/user",verifyToken, checkDb("user"), asyncHandler(async (req, res) => {
   const result = await req.targetCollection.find().toArray();
