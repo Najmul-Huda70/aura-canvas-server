@@ -62,7 +62,7 @@ async function dbConnection() {
     console.error("Database initialization failed:", error);
   }
 }
-dbConnection().catch(console.dir);
+dbConnection();
 
 // DDoS protection
 const apiLimiter = rateLimit({
@@ -75,7 +75,27 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
 });
 app.use("/api/", apiLimiter);
-
+app.get("/test-db", async (req, res) => {
+  try {
+    console.log("Testing database connection...");
+    
+    const dbCollections = await dbConnection();
+    
+    res.status(200).json({
+      success: true,
+      message: "Congratulations! Connected to MongoDB Atlas successfully.",
+      database: process.env.MONGO_DB || "aura-db",
+      available_collections: Object.keys(dbCollections)
+    });
+  } catch (error) {
+    console.error("Test DB Route Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Database connection failed!",
+      error: error.message
+    });
+  }
+});
 // Global Reusable Boilerplate Utilities
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch((error) => {
