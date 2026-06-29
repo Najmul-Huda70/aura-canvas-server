@@ -12,7 +12,6 @@ const app = express();
 const port = process.env.PORT || 3001;
 const uri = process.env.MONGO_DB_URI;
 const JWKS = `${process.env.CLIENT_URL}/api/auth/jwks`;
-
 const allowedOrigins = [
   process.env.CLIENT_URL || "http://localhost:3000",
 ];
