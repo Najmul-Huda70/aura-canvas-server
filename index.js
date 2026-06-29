@@ -14,7 +14,6 @@ const uri = process.env.MONGO_DB_URI;
 const JWKS = `${process.env.CLIENT_URL}/api/auth/jwks`;
 
 const allowedOrigins = [
-  aura-canvas-server.vercel.app,
   process.env.CLIENT_URL || "http://localhost:3000",
 ];
 
