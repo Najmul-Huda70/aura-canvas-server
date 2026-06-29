@@ -5,16 +5,16 @@ const express = require("express");
 const cors = require("cors");
 const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+
 const app = express();
 
-// Configuration Globals
+// ─── Configuration Globals ────────────────────────────────────────────────────
 const port = process.env.PORT || 3001;
-const uri = process.env.MONGO_DB_URI;
+const uri = process.env.MONGO_DB_URI; // Make sure this matches your Render env var name exactly
 const JWKS = `${process.env.CLIENT_URL}/api/auth/jwks`;
-const allowedOrigins = [
-  process.env.CLIENT_URL || "http://localhost:3000",
-];
+const allowedOrigins = [process.env.CLIENT_URL || "http://localhost:3000"];
 
+// ─── CORS ─────────────────────────────────────────────────────────────────────
 app.use(
   cors({
     origin: function (origin, callback) {
@@ -26,11 +26,12 @@ app.use(
     },
     credentials: true,
     optionsSuccessStatus: 200,
-  }),
+  })
 );
 
 app.use(express.json());
 
+// ─── MongoDB Client ───────────────────────────────────────────────────────────
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -39,41 +40,65 @@ const client = new MongoClient(uri, {
   },
 });
 
-// Database State Containers
-let db, collections = {};
+// ─── Database State ───────────────────────────────────────────────────────────
+let db;
+let collections = {};
 let cachedClient = null;
 let cachedDb = null;
+
 async function dbConnection() {
+  // Return cached connection if available
   if (cachedClient && cachedDb) {
     return collections;
   }
+
   try {
-    
     await client.connect();
     db = client.db(process.env.MONGO_DB);
-    
+
     // Core Collection Initializations
-    collections.user = db.collection("user");
-    collections.category = db.collection("category");
-    collections.artworks = db.collection("artworks");
-    collections.reviews = db.collection("reviews");
-    collections.plans = db.collection("plans");
-    collections.orders = db.collection("orders");
+    collections.user          = db.collection("user");
+    collections.category      = db.collection("category");
+    collections.artworks      = db.collection("artworks");
+    collections.reviews       = db.collection("reviews");
+    collections.plans         = db.collection("plans");
+    collections.orders        = db.collection("orders");
     collections.subscriptions = db.collection("subscriptions");
-    
-    console.log("Pinged deployment. Successfully connected to MongoDB!");
+
+    // ✅ FIX: Actually assign the cache so it works on subsequent calls
+    cachedClient = client;
+    cachedDb = db;
+
+    console.log("✅ Successfully connected to MongoDB!");
     return collections;
   } catch (error) {
-    console.error("Database initialization failed:", error);
+    console.error("❌ Database initialization failed:", error);
     cachedClient = null;
     cachedDb = null;
     throw error;
   }
 }
-dbConnection();
 
+// Initialize DB on startup
+dbConnection().catch((err) => {
+  console.error("Startup DB connection error:", err.message);
+});
 
-// Global Reusable Boilerplate Utilities
+// ✅ FIX: Graceful shutdown for Render's SIGTERM signal
+process.on("SIGTERM", async () => {
+  console.log("SIGTERM received. Closing MongoDB connection...");
+  await client.close();
+  console.log("MongoDB connection closed. Exiting.");
+  process.exit(0);
+});
+
+process.on("SIGINT", async () => {
+  console.log("SIGINT received. Closing MongoDB connection...");
+  await client.close();
+  process.exit(0);
+});
+
+// ─── Global Reusable Utilities ────────────────────────────────────────────────
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch((error) => {
     console.error("Route Error:", error);
@@ -87,7 +112,9 @@ const asyncHandler = (fn) => (req, res, next) => {
 
 const checkDb = (collectionName) => (req, res, next) => {
   if (!collections[collectionName]) {
-    return res.status(500).json({ message: `Database collection '${collectionName}' not initialized` });
+    return res
+      .status(500)
+      .json({ message: `Database collection '${collectionName}' not initialized` });
   }
   req.targetCollection = collections[collectionName];
   next();
@@ -98,15 +125,14 @@ const parseIdQuery = (idStr) => {
   return ObjectId.isValid(idStr) ? new ObjectId(idStr) : idStr;
 };
 
-// Security Gateway Token Verification
+// ─── Security: JWT Verification ──────────────────────────────────────────────
 const verifyToken = async (req, res, next) => {
   const { authorization } = req.headers;
   if (!authorization || !authorization.startsWith("Bearer ")) {
     return res.status(401).json({ message: "Unauthorized! Token missing." });
   }
-  
+
   const token = authorization.split(" ")[1];
-  // console.log('token from backend:',token);
   if (!token) return res.status(401).json({ message: "Unauthorized" });
 
   try {
@@ -120,352 +146,449 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-// Base Endpoint Health Check
+// ─── Health Check Endpoints ───────────────────────────────────────────────────
 app.get("/", (req, res) => res.send("Hello World!"));
-app.get("/test-db", async (req, res) => {
-  try {
-    console.log("Testing database connection...");
-    
+
+app.get(
+  "/test-db",
+  asyncHandler(async (req, res) => {
     const dbCollections = await dbConnection();
-    
     res.status(200).json({
       success: true,
-      message: "Congratulations! Connected to MongoDB Atlas successfully.",
+      message: "Connected to MongoDB Atlas successfully.",
       database: process.env.MONGO_DB || "aura-db",
-      available_collections: Object.keys(dbCollections)
+      available_collections: Object.keys(dbCollections),
     });
-  } catch (error) {
-    console.error("Test DB Route Error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Database connection failed!",
-      error: error.message
-    });
-  }
-});
+  })
+);
+
 app.get("/env-test", (req, res) => {
   res.json({
-    hasMongoUri: !!process.env.MONGODB_URI,
+    // ✅ FIX: Use the correct env var name (MONGO_DB_URI, not MONGODB_URI)
+    hasMongoUri: !!process.env.MONGO_DB_URI,
     hasClientUrl: !!process.env.CLIENT_URL,
   });
 });
-app.get("/mongo-test", async (req, res) => {
-  try {
-    const client = new MongoClient(process.env.MONGODB_URI);
 
-    await client.connect();
-
-    const ping = await client.db("admin").command({ ping: 1 });
-
-    res.json({
-      success: true,
-      ping,
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    });
-  }
-});
-// Users Route Layer
-app.get("/user",verifyToken, checkDb("user"), asyncHandler(async (req, res) => {
-  const result = await req.targetCollection.find().toArray();
-  res.status(200).json({ success: true, data: result });
-}));
-
-// Unified Artworks Query Logic
-app.get("/artworks", checkDb("artworks"), asyncHandler(async (req, res) => {
-  const { id, search, userId, features, approvedOnly } = req.query;
-  let query = {};
-
-  if (approvedOnly === "true") {
-    query.status = { $in: ["available", "unavailable"] };
-  }
-
-  const parsedId = parseIdQuery(id);
-  if (parsedId) query._id = parsedId;
-
-  const parsedArtistId = parseIdQuery(userId);
-  if (parsedArtistId) query.artistId = parsedArtistId;
-
-  if (features) {
-    query.features = features === "true";
-  }
-
-  if (search) {
-    query.$or = [
-      { title: { $regex: search, $options: "i" } },
-      { artistName: { $regex: search, $options: "i" } },
-    ];
-  }
-
-  const result = await req.targetCollection.find(query).toArray();
-  res.status(200).json({ success: true, data: result });
-}));
-
-app.post("/artworks", checkDb("artworks"), asyncHandler(async (req, res) => {
-  const { title, artistId, artistName, description, price, category, imageUrl, features } = req.body;
-
-  if (!title || !artistId || !price || !category || !imageUrl) {
-    return res.status(400).json({
-      message: "Missing required fields (title, artistId, price, category, imageUrl)",
-    });
-  }
-
-  const newArtwork = {
-    title: title.trim(),
-    artistId: new ObjectId(artistId),
-    artistName: artistName || "",
-    description: description || "",
-    price: Number(price),
-    category,
-    imageUrl,
-    features: features === true || features === "true",
-    status: "pending",
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-
-  const result = await req.targetCollection.insertOne(newArtwork);
-  res.status(201).json({ success: true, message: "Artwork uploaded successfully.", artworkId: result.insertedId });
-}));
-
-app.put("/artworks/:id", checkDb("artworks"), asyncHandler(async (req, res) => {
-  const artworkId = req.params.id;
-  const { title, description, price, category, imageUrl } = req.body;
-
-  if (!ObjectId.isValid(artworkId)) {
-    return res.status(400).json({ success: false, message: "Invalid Artwork ID Format" });
-  }
-
-  const result = await req.targetCollection.updateOne(
-    { _id: new ObjectId(artworkId) },
-    {
-      $set: {
-        title: title.trim(),
-        description,
-        price: Number(price),
-        category,
-        imageUrl,
-        updatedAt: new Date(),
-      },
+// ✅ FIX: Use the same MONGO_DB_URI env var (was MONGODB_URI — typo fixed)
+app.get(
+  "/mongo-test",
+  asyncHandler(async (req, res) => {
+    const testClient = new MongoClient(process.env.MONGO_DB_URI);
+    try {
+      await testClient.connect();
+      const ping = await testClient.db("admin").command({ ping: 1 });
+      res.json({ success: true, ping });
+    } finally {
+      await testClient.close();
     }
-  );
+  })
+);
 
-  if (result.matchedCount === 1) {
-    res.json({ success: true, message: "Artwork updated successfully in database!" });
-  } else {
-    res.status(404).json({ success: false, message: "Artwork not found in database" });
-  }
-}));
+// ─── Users ────────────────────────────────────────────────────────────────────
+app.get(
+  "/user",
+  verifyToken,
+  checkDb("user"),
+  asyncHandler(async (req, res) => {
+    const result = await req.targetCollection.find().toArray();
+    res.status(200).json({ success: true, data: result });
+  })
+);
 
-app.patch("/artworks", checkDb("artworks"), asyncHandler(async (req, res) => {
-  const { artId } = req.query;
-  const { status } = req.body;
+// ─── Artworks ─────────────────────────────────────────────────────────────────
+app.get(
+  "/artworks",
+  checkDb("artworks"),
+  asyncHandler(async (req, res) => {
+    const { id, search, userId, features, approvedOnly } = req.query;
+    let query = {};
 
-  if (!artId || !status) {
-    return res.status(400).json({ success: false, message: "Artwork ID and Status values are required" });
-  }
+    if (approvedOnly === "true") {
+      query.status = { $in: ["available", "unavailable"] };
+    }
 
-  await req.targetCollection.updateOne({ _id: new ObjectId(artId) }, { $set: { status } });
-  return res.status(200).json({ success: true, message: "Artwork status updated successfully" });
-}));
+    const parsedId = parseIdQuery(id);
+    if (parsedId) query._id = parsedId;
 
-app.delete("/artworks/:id", checkDb("artworks"), asyncHandler(async (req, res) => {
-  const result = await req.targetCollection.deleteOne({ _id: new ObjectId(req.params.id) });
-  if (result.deletedCount === 1) {
-    res.json({ success: true, message: "Artwork deleted successfully from database" });
-  } else {
-    res.status(404).json({ success: false, message: "Artwork not found" });
-  }
-}));
+    const parsedArtistId = parseIdQuery(userId);
+    if (parsedArtistId) query.artistId = parsedArtistId;
 
-// Categories Route Layer
-app.get("/category", checkDb("category"), asyncHandler(async (req, res) => {
-  const result = await req.targetCollection.find().toArray();
-  res.status(200).json({ success: true, data: result });
-}));
+    if (features) {
+      query.features = features === "true";
+    }
 
-// Orders Management Layer
-app.post("/artwork-orders", checkDb("orders"), asyncHandler(async (req, res) => {
-  const { email, artworkId, userId, amount, paymentIntentId, purchasedAt } = req.body;
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { artistName: { $regex: search, $options: "i" } },
+      ];
+    }
 
-  if (!artworkId || !email) {
-    return res.status(400).json({ success: false, message: "Missing required fields" });
-  }
+    const result = await req.targetCollection.find(query).toArray();
+    res.status(200).json({ success: true, data: result });
+  })
+);
 
-  const newOrder = {
-    buyerEmail: email,
-    buyerId: userId ? new ObjectId(userId) : null,
-    artworkId: new ObjectId(artworkId),
-    amount: parseFloat(amount),
-    paymentIntentId,
-    status: "completed",
-    purchasedAt: purchasedAt ? new Date(purchasedAt) : new Date(),
-  };
+app.post(
+  "/artworks",
+  checkDb("artworks"),
+  asyncHandler(async (req, res) => {
+    const { title, artistId, artistName, description, price, category, imageUrl, features } =
+      req.body;
 
-  const orderResult = await req.targetCollection.insertOne(newOrder);
-  const artworkUpdateResult = await collections.artworks.updateOne(
-    { _id: new ObjectId(artworkId) },
-    { $set: { status: "sold", buyerEmail: email, soldAt: new Date() } }
-  );
+    if (!title || !artistId || !price || !category || !imageUrl) {
+      return res.status(400).json({
+        message: "Missing required fields (title, artistId, price, category, imageUrl)",
+      });
+    }
 
-  if (orderResult.insertedId && artworkUpdateResult.modifiedCount > 0) {
-    return res.status(201).json({ success: true, message: "Order placed successfully!", orderId: orderResult.insertedId });
-  } else {
-    return res.status(500).json({ success: false, message: "Failed to cleanly complete atomic order operations." });
-  }
-}));
+    const newArtwork = {
+      title: title.trim(),
+      artistId: new ObjectId(artistId),
+      artistName: artistName || "",
+      description: description || "",
+      price: Number(price),
+      category,
+      imageUrl,
+      features: features === true || features === "true",
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
-app.get("/my-orders",verifyToken, checkDb("orders"), asyncHandler(async (req, res) => {
-  const { email } = req.query;
-  if (!email) return res.status(400).json({ success: false, message: "Email query parameter is required" });
-
-  const orders = await req.targetCollection.aggregate([
-    { $match: { buyerEmail: email, status: "completed" } },
-    { $lookup: { from: "artworks", localField: "artworkId", foreignField: "_id", as: "artworkDetails" } },
-    { $unwind: "$artworkDetails" },
-    { $sort: { purchasedAt: -1 } },
-  ]).toArray();
-
-  return res.status(200).json({ success: true, count: orders.length, data: orders });
-}));
-app.get("/admin/transactions", verifyToken, asyncHandler(async (req, res) => {
-  const orders = await collections.orders.find().toArray();
-  const purchaseTransactions = orders.map(order => ({
-    transactionId: order.paymentIntentId || order._id,
-    type: "PURCHASE", 
-    email: order.buyerEmail,
-    date: order.purchasedAt,
-    amount: order.amount
-  }));
-
-  const subscriptions = await collections.subscriptions.find().toArray();
-  const subscriptionTransactions = subscriptions.map(sub => ({
-    transactionId: sub.paymentIntentId || sub.subscriptionId || sub._id,
-    type: "SUBSCRIPTION", 
-    email: sub.email,
-    date: sub.createdAt || sub.purchasedAt, 
-    amount: sub.amount || 0
-  }));
-
-  const combinedTransactions = [...purchaseTransactions, ...subscriptionTransactions].sort(
-    (a, b) => new Date(b.date) - new Date(a.date)
-  );
-
-  res.status(200).json({
-    success: true,
-    count: combinedTransactions.length,
-    data: combinedTransactions
-  });
-}));
-app.get("/admin/orders", checkDb("orders"), asyncHandler(async (req, res) => {
-  const orders = await req.targetCollection.aggregate([
-    {
-      $lookup: {
-        from: "artworks",
-        localField: "artworkId",
-        foreignField: "_id",
-        as: "artworkDetails"
-      }
-    },
-    { $unwind: { path: "$artworkDetails", preserveNullAndEmptyArrays: true } },
-    { $sort: { purchasedAt: -1 } }
-  ]).toArray();
-
-  res.status(200).json({
-    success: true,
-    count: orders.length,
-    data: orders
-  });
-}));
-app.get("/sales-history",verifyToken, checkDb("orders"), asyncHandler(async (req, res) => {
-  const { artistId } = req.query;
-  if (!artistId) return res.status(400).json({ success: false, message: "Artist ID query parameter is required" });
-let queryArtistId = artistId;
-if (ObjectId.isValid(artistId)) {
-  queryArtistId = new ObjectId(artistId);
-}
-  const sales = await req.targetCollection.aggregate([
-    { $lookup: { from: "artworks", localField: "artworkId", foreignField: "_id", as: "artworkDetails" } },
-    { $unwind: "$artworkDetails" },
-    {
-        $lookup: {
-          from: "user", 
-          localField: "buyerId",
-          foreignField: "_id",
-          as: "buyerDetails"
-        }
-      },
-      { $unwind: { path: "$buyerDetails"} },
-    { $match: { status: "completed", "artworkDetails.artistId": queryArtistId } },
-    { $sort: { purchasedAt: -1 } },
-  ]).toArray();
-
-  const totalEarnings = sales.reduce((sum, item) => sum + (item.amount || 0), 0);
-  res.status(200).json({ success: true, count: sales.length, totalEarnings, data: sales });
-}));
-
-// Plans Route Layer
-app.get("/plans", checkDb("plans"), asyncHandler(async (req, res) => {
-  const { planId } = req.query;
-  const result = await req.targetCollection.find({ id: planId ?? "user_free" }).toArray();
-  res.status(200).json({ success: true, data: result });
-}));
-
-// Subscriptions & Memberships Layer
-app.post("/subscriptions", checkDb("subscriptions"), asyncHandler(async (req, res) => {
-  const data = req.body;
-
-  const subInfo = {
-    email: data.email,
-    planId: data.planId,
-    amount: data.amount ?? parseFloat(data.amount),
-    paymentIntentId: data.paymentIntentId || data.subscriptionId || null, 
-    createdAt: new Date() 
-  };
-
-  await req.targetCollection.insertOne(subInfo);
-  
-  const updateResult = await collections.user.updateOne(
-    { email: subInfo.email },
-    { $set: { plan: subInfo.planId } }
-  );
-
-  if (updateResult.modifiedCount === 0) {
-    return res.status(404).json({ 
-      success: false, 
-      message: "User tier already matches target or user profile missing" 
+    const result = await req.targetCollection.insertOne(newArtwork);
+    res.status(201).json({
+      success: true,
+      message: "Artwork uploaded successfully.",
+      artworkId: result.insertedId,
     });
-  }
+  })
+);
 
-  return res.status(200).json({ 
-    success: true, 
-    message: "Subscription and User Plan updated successfully!" 
-  });
-}));
+app.put(
+  "/artworks/:id",
+  checkDb("artworks"),
+  asyncHandler(async (req, res) => {
+    const artworkId = req.params.id;
+    const { title, description, price, category, imageUrl } = req.body;
 
-// Feedback & Reviews Route Layer
-app.get("/reviews", checkDb("reviews"), asyncHandler(async (req, res) => {
-  const { id, userId } = req.query;
-  let query = {};
+    if (!ObjectId.isValid(artworkId)) {
+      return res.status(400).json({ success: false, message: "Invalid Artwork ID Format" });
+    }
 
-  const parsedId = parseIdQuery(id);
-  if (parsedId) query._id = parsedId;
+    const result = await req.targetCollection.updateOne(
+      { _id: new ObjectId(artworkId) },
+      {
+        $set: {
+          title: title.trim(),
+          description,
+          price: Number(price),
+          category,
+          imageUrl,
+          updatedAt: new Date(),
+        },
+      }
+    );
 
-  const parsedArtistId = parseIdQuery(userId);
-  if (parsedArtistId) query.artistId = parsedArtistId;
+    if (result.matchedCount === 1) {
+      res.json({ success: true, message: "Artwork updated successfully in database!" });
+    } else {
+      res.status(404).json({ success: false, message: "Artwork not found in database" });
+    }
+  })
+);
 
-  const result = await req.targetCollection.find(query).toArray();
-  res.status(200).json({ success: true, data: result });
-}));
-// module.exports = app;
-// app.listen(port, () => {
-//   console.log(`Application server runtime online on port: ${port}`);
-// });
+app.patch(
+  "/artworks",
+  checkDb("artworks"),
+  asyncHandler(async (req, res) => {
+    const { artId } = req.query;
+    const { status } = req.body;
+
+    if (!artId || !status) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Artwork ID and Status values are required" });
+    }
+
+    await req.targetCollection.updateOne(
+      { _id: new ObjectId(artId) },
+      { $set: { status } }
+    );
+    return res
+      .status(200)
+      .json({ success: true, message: "Artwork status updated successfully" });
+  })
+);
+
+app.delete(
+  "/artworks/:id",
+  checkDb("artworks"),
+  asyncHandler(async (req, res) => {
+    const result = await req.targetCollection.deleteOne({
+      _id: new ObjectId(req.params.id),
+    });
+    if (result.deletedCount === 1) {
+      res.json({ success: true, message: "Artwork deleted successfully from database" });
+    } else {
+      res.status(404).json({ success: false, message: "Artwork not found" });
+    }
+  })
+);
+
+// ─── Categories ───────────────────────────────────────────────────────────────
+app.get(
+  "/category",
+  checkDb("category"),
+  asyncHandler(async (req, res) => {
+    const result = await req.targetCollection.find().toArray();
+    res.status(200).json({ success: true, data: result });
+  })
+);
+
+// ─── Orders ───────────────────────────────────────────────────────────────────
+app.post(
+  "/artwork-orders",
+  checkDb("orders"),
+  asyncHandler(async (req, res) => {
+    const { email, artworkId, userId, amount, paymentIntentId, purchasedAt } = req.body;
+
+    if (!artworkId || !email) {
+      return res.status(400).json({ success: false, message: "Missing required fields" });
+    }
+
+    const newOrder = {
+      buyerEmail: email,
+      buyerId: userId ? new ObjectId(userId) : null,
+      artworkId: new ObjectId(artworkId),
+      amount: parseFloat(amount),
+      paymentIntentId,
+      status: "completed",
+      purchasedAt: purchasedAt ? new Date(purchasedAt) : new Date(),
+    };
+
+    const orderResult = await req.targetCollection.insertOne(newOrder);
+    const artworkUpdateResult = await collections.artworks.updateOne(
+      { _id: new ObjectId(artworkId) },
+      { $set: { status: "sold", buyerEmail: email, soldAt: new Date() } }
+    );
+
+    if (orderResult.insertedId && artworkUpdateResult.modifiedCount > 0) {
+      return res.status(201).json({
+        success: true,
+        message: "Order placed successfully!",
+        orderId: orderResult.insertedId,
+      });
+    } else {
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to cleanly complete atomic order operations." });
+    }
+  })
+);
+
+app.get(
+  "/my-orders",
+  verifyToken,
+  checkDb("orders"),
+  asyncHandler(async (req, res) => {
+    const { email } = req.query;
+    if (!email)
+      return res
+        .status(400)
+        .json({ success: false, message: "Email query parameter is required" });
+
+    const orders = await req.targetCollection
+      .aggregate([
+        { $match: { buyerEmail: email, status: "completed" } },
+        {
+          $lookup: {
+            from: "artworks",
+            localField: "artworkId",
+            foreignField: "_id",
+            as: "artworkDetails",
+          },
+        },
+        { $unwind: "$artworkDetails" },
+        { $sort: { purchasedAt: -1 } },
+      ])
+      .toArray();
+
+    return res.status(200).json({ success: true, count: orders.length, data: orders });
+  })
+);
+
+app.get(
+  "/admin/transactions",
+  verifyToken,
+  asyncHandler(async (req, res) => {
+    const orders = await collections.orders.find().toArray();
+    const purchaseTransactions = orders.map((order) => ({
+      transactionId: order.paymentIntentId || order._id,
+      type: "PURCHASE",
+      email: order.buyerEmail,
+      date: order.purchasedAt,
+      amount: order.amount,
+    }));
+
+    const subscriptions = await collections.subscriptions.find().toArray();
+    const subscriptionTransactions = subscriptions.map((sub) => ({
+      transactionId: sub.paymentIntentId || sub.subscriptionId || sub._id,
+      type: "SUBSCRIPTION",
+      email: sub.email,
+      date: sub.createdAt || sub.purchasedAt,
+      amount: sub.amount || 0,
+    }));
+
+    const combinedTransactions = [
+      ...purchaseTransactions,
+      ...subscriptionTransactions,
+    ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.status(200).json({
+      success: true,
+      count: combinedTransactions.length,
+      data: combinedTransactions,
+    });
+  })
+);
+
+app.get(
+  "/admin/orders",
+  checkDb("orders"),
+  asyncHandler(async (req, res) => {
+    const orders = await req.targetCollection
+      .aggregate([
+        {
+          $lookup: {
+            from: "artworks",
+            localField: "artworkId",
+            foreignField: "_id",
+            as: "artworkDetails",
+          },
+        },
+        { $unwind: { path: "$artworkDetails", preserveNullAndEmptyArrays: true } },
+        { $sort: { purchasedAt: -1 } },
+      ])
+      .toArray();
+
+    res.status(200).json({ success: true, count: orders.length, data: orders });
+  })
+);
+
+app.get(
+  "/sales-history",
+  verifyToken,
+  checkDb("orders"),
+  asyncHandler(async (req, res) => {
+    const { artistId } = req.query;
+    if (!artistId)
+      return res
+        .status(400)
+        .json({ success: false, message: "Artist ID query parameter is required" });
+
+    const queryArtistId = ObjectId.isValid(artistId) ? new ObjectId(artistId) : artistId;
+
+    const sales = await req.targetCollection
+      .aggregate([
+        {
+          $lookup: {
+            from: "artworks",
+            localField: "artworkId",
+            foreignField: "_id",
+            as: "artworkDetails",
+          },
+        },
+        { $unwind: "$artworkDetails" },
+        {
+          $lookup: {
+            from: "user",
+            localField: "buyerId",
+            foreignField: "_id",
+            as: "buyerDetails",
+          },
+        },
+        { $unwind: { path: "$buyerDetails" } },
+        { $match: { status: "completed", "artworkDetails.artistId": queryArtistId } },
+        { $sort: { purchasedAt: -1 } },
+      ])
+      .toArray();
+
+    const totalEarnings = sales.reduce((sum, item) => sum + (item.amount || 0), 0);
+    res.status(200).json({ success: true, count: sales.length, totalEarnings, data: sales });
+  })
+);
+
+// ─── Plans ────────────────────────────────────────────────────────────────────
+app.get(
+  "/plans",
+  checkDb("plans"),
+  asyncHandler(async (req, res) => {
+    const { planId } = req.query;
+    const result = await req.targetCollection
+      .find({ id: planId ?? "user_free" })
+      .toArray();
+    res.status(200).json({ success: true, data: result });
+  })
+);
+
+// ─── Subscriptions ────────────────────────────────────────────────────────────
+app.post(
+  "/subscriptions",
+  checkDb("subscriptions"),
+  asyncHandler(async (req, res) => {
+    const data = req.body;
+
+    const subInfo = {
+      email: data.email,
+      planId: data.planId,
+      amount: data.amount ?? parseFloat(data.amount),
+      paymentIntentId: data.paymentIntentId || data.subscriptionId || null,
+      createdAt: new Date(),
+    };
+
+    await req.targetCollection.insertOne(subInfo);
+
+    const updateResult = await collections.user.updateOne(
+      { email: subInfo.email },
+      { $set: { plan: subInfo.planId } }
+    );
+
+    if (updateResult.modifiedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "User tier already matches target or user profile missing",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Subscription and User Plan updated successfully!",
+    });
+  })
+);
+
+// ─── Reviews ──────────────────────────────────────────────────────────────────
+app.get(
+  "/reviews",
+  checkDb("reviews"),
+  asyncHandler(async (req, res) => {
+    const { id, userId } = req.query;
+    let query = {};
+
+    const parsedId = parseIdQuery(id);
+    if (parsedId) query._id = parsedId;
+
+    const parsedArtistId = parseIdQuery(userId);
+    if (parsedArtistId) query.artistId = parsedArtistId;
+
+    const result = await req.targetCollection.find(query).toArray();
+    res.status(200).json({ success: true, data: result });
+  })
+);
+
+// ─── Start Server ─────────────────────────────────────────────────────────────
 app.listen(port, "0.0.0.0", () => {
-  console.log(`Server running on port ${port}`);
+  console.log(`🚀 Server running on port ${port}`);
 });
