@@ -589,6 +589,14 @@ app.get(
 );
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
-app.listen(port, "0.0.0.0", () => {
-  console.log(`🚀 Server running on port ${port}`);
+const server = app.listen(port, "0.0.0.0", () => {
+  console.log(`=============================================`);
+  console.log(`🚀 SERVER IS SUCCESSFULLY RUNNING ON PORT: ${port}`);
+  console.log(`=============================================`);
+});
+process.on("unhandledRejection", (err) => {
+  console.log(`Shutting down the server due to Unhandled Promise Rejection: ${err.message}`);
+  server.close(() => {
+    process.exit(1);
+  });
 });
