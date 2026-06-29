@@ -5,7 +5,6 @@ const express = require("express");
 const cors = require("cors");
 const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
-const rateLimit = require("express-rate-limit");
 const app = express();
 
 // Configuration Globals
@@ -73,18 +72,6 @@ async function dbConnection() {
 }
 dbConnection();
 
-// DDoS protection
-const apiLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: {
-    message: "Too many requests from this IP, please try again later.",
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-app.use("/api/", apiLimiter);
 
 app.get("/test-db", async (req, res) => {
   try {
