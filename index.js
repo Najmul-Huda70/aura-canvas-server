@@ -58,6 +58,7 @@ async function dbConnection() {
     collections.subscriptions = db.collection("subscriptions");
     
     console.log("Pinged deployment. Successfully connected to MongoDB!");
+    return collections;
   } catch (error) {
     console.error("Database initialization failed:", error);
   }
