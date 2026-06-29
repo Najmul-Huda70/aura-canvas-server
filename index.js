@@ -15,19 +15,12 @@ const JWKS = `${process.env.CLIENT_URL}/api/auth/jwks`;
 const allowedOrigins = [process.env.CLIENT_URL || "http://localhost:3000"];
 
 // ─── CORS ─────────────────────────────────────────────────────────────────────
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-        callback(null, true);
-      } else {
-        callback(new Error("Not allowed by CORS Security Policy"));
-      }
-    },
-    credentials: true,
-    optionsSuccessStatus: 200,
-  })
-);
+app.use(cors({
+  origin: "https://aura-canvas-client.vercel.app",
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "Cookie"]
+}));
 app.set("trust proxy", 1);
 app.use(express.json());
 
