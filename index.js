@@ -8,18 +8,18 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 const app = express();
 
-// ─── Configuration Globals ────────────────────────────────────────────────────
+// Configuration Globals 
 const port = process.env.PORT || 3001;
 const uri = process.env.MONGO_DB_URI; // Make sure this matches your Render env var name exactly
 const JWKS = `${process.env.CLIENT_URL}/api/auth/jwks`;
 const allowedOrigins = [process.env.CLIENT_URL || "http://localhost:3000"];
 
-// ─── CORS ─────────────────────────────────────────────────────────────────────
+// CORS 
 app.use(cors());
 app.set("trust proxy", 1);
 app.use(express.json());
 
-// ─── MongoDB Client ───────────────────────────────────────────────────────────
+// MongoDB Client
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -28,7 +28,7 @@ const client = new MongoClient(uri, {
   },
 });
 
-// ─── Database State ───────────────────────────────────────────────────────────
+// Database State 
 let db;
 let collections = {};
 let cachedClient = null;
@@ -38,7 +38,7 @@ async function dbConnection() {
   // Return cached connection if available
   if (cachedClient && cachedDb) {
     return collections;
-  }
+  } 
 
   try {
     await client.connect();
@@ -53,11 +53,10 @@ async function dbConnection() {
     collections.orders        = db.collection("orders");
     collections.subscriptions = db.collection("subscriptions");
 
-    // ✅ FIX: Actually assign the cache so it works on subsequent calls
     cachedClient = client;
     cachedDb = db;
 
-    console.log("✅ Successfully connected to MongoDB!");
+    console.log("Successfully connected to MongoDB!");
     return collections;
   } catch (error) {
     console.error("❌ Database initialization failed:", error);
@@ -72,7 +71,6 @@ dbConnection().catch((err) => {
   console.error("Startup DB connection error:", err.message);
 });
 
-// ✅ FIX: Graceful shutdown for Render's SIGTERM signal
 process.on("SIGTERM", async () => {
   console.log("SIGTERM received. Closing MongoDB connection...");
   await client.close();
@@ -86,7 +84,7 @@ process.on("SIGINT", async () => {
   process.exit(0);
 });
 
-// ─── Global Reusable Utilities ────────────────────────────────────────────────
+// Global Reusable Utilities 
 const asyncHandler = (fn) => (req, res, next) => {
   Promise.resolve(fn(req, res, next)).catch((error) => {
     console.error("Route Error:", error);
@@ -113,7 +111,7 @@ const parseIdQuery = (idStr) => {
   return ObjectId.isValid(idStr) ? new ObjectId(idStr) : idStr;
 };
 
-// ─── Security: JWT Verification ──────────────────────────────────────────────
+// Security: JWT Verification
 const verifyToken = async (req, res, next) => {
   const { authorization } = req.headers;
   if (!authorization || !authorization.startsWith("Bearer ")) {
@@ -134,7 +132,7 @@ const verifyToken = async (req, res, next) => {
   }
 };
 
-// ─── Health Check Endpoints ───────────────────────────────────────────────────
+// Health Check Endpoints
 app.get("/", (req, res) => res.send("Hello World!"));
 
 app.get(
@@ -152,15 +150,12 @@ app.get(
 
 app.get("/env-test", (req, res) => {
   res.json({
-    // ✅ FIX: Use the correct env var name (MONGO_DB_URI, not MONGODB_URI)
     hasMongoUri: !!process.env.MONGO_DB_URI,
     hasClientUrl: !!process.env.CLIENT_URL,
   });
 });
 
-// ✅ FIX: Use the same MONGO_DB_URI env var (was MONGODB_URI — typo fixed)
-app.get(
-  "/mongo-test",
+app.get("/mongo-test",
   asyncHandler(async (req, res) => {
     const testClient = new MongoClient(process.env.MONGO_DB_URI);
     try {
@@ -173,10 +168,8 @@ app.get(
   })
 );
 
-// ─── Users ────────────────────────────────────────────────────────────────────
-app.get(
-  "/user",
-  verifyToken,
+// Users
+app.get("/user",verifyToken,
   checkDb("user"),
   asyncHandler(async (req, res) => {
     const result = await req.targetCollection.find().toArray();
@@ -184,9 +177,8 @@ app.get(
   })
 );
 
-// ─── Artworks ─────────────────────────────────────────────────────────────────
-app.get(
-  "/artworks",
+// Artworks
+app.get("/artworks",
   checkDb("artworks"),
   asyncHandler(async (req, res) => {
     const { id, search, userId, features, approvedOnly } = req.query;
@@ -218,8 +210,7 @@ app.get(
   })
 );
 
-app.post(
-  "/artworks",
+app.post("/artworks",
   checkDb("artworks"),
   asyncHandler(async (req, res) => {
     const { title, artistId, artistName, description, price, category, imageUrl, features } =
@@ -578,9 +569,7 @@ app.get(
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
 const server = app.listen(port, "0.0.0.0", () => {
-  console.log(`=============================================`);
   console.log(`SERVER IS SUCCESSFULLY RUNNING ON PORT: ${port}`);
-  console.log(`=============================================`);
 });
 process.on("unhandledRejection", (err) => {
   console.log(`Shutting down the server due to Unhandled Promise Rejection: ${err.message}`);
